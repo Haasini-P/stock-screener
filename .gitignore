@@ -1,0 +1,70 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+.next/
+out/
+build/
+
+# Python
+*.egg-info/
+dist/
+eggs/
+*.egg
+
+# Database
+*.db
+*.sqlite3
+
+# Model artifacts
+model_registry/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+!backend/app/ml/models/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets
+*.pem
+*.key
+*.cert

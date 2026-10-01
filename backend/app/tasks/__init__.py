@@ -1,0 +1,1 @@
+"""StockMind AI — Tasks Package."""
