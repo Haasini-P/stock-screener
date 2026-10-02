@@ -35,7 +35,7 @@ export interface AppNotification {
 
 export const TABS = [
   "dashboard", "scanner", "predictions", "portfolio", "signals",
-  "analytics", "sectors", "news", "alerts", "settings",
+  "analytics", "sectors", "news", "alerts", "prompt", "report", "settings",
 ] as const;
 export type Tab = (typeof TABS)[number];
 

@@ -2,16 +2,68 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Link2, Link2Off, PieChart as PieIcon, ShieldAlert, Wallet } from "lucide-react";
+import { Crosshair, Link2, Link2Off, PieChart as PieIcon, ShieldAlert, Wallet, X } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { authAPI, errorMessage, healthAPI, portfolioAPI } from "@/lib/api";
+import { authAPI, errorMessage, healthAPI, ordersAPI, portfolioAPI } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtINR, fmtNum, fmtPct, toneColor } from "@/lib/format";
+import { fmtINR, fmtNum, fmtPct, timeAgo, toneColor } from "@/lib/format";
 import { useNavigateTab } from "../AppShell";
 import { Card, EmptyState, ErrorState, KeyValue, LoadingRows, PageHeader, RefreshButton, SectionHeader, StockLink } from "../ui";
 
 const PIE_COLORS = ["#6366f1", "#22d3ee", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#ec4899", "#14b8a6", "#8b92a5"];
+
+function ActiveBracketsCard() {
+  const { toast } = useAppStore();
+  const brackets = useApi(() => ordersAPI.listBrackets(), []);
+  const active = (brackets.data || []).filter((b) => b.status === "ACTIVE");
+
+  const cancel = async (id: string, symbol: string) => {
+    if (!window.confirm(`Cancel the target/stop-loss bracket for ${symbol}?`)) return;
+    try {
+      await ordersAPI.cancelBracket(id);
+      toast(`Bracket cancelled for ${symbol}`, "success");
+      brackets.reload();
+    } catch (err) {
+      toast(errorMessage(err, "Could not cancel this bracket."), "error");
+    }
+  };
+
+  return (
+    <Card>
+      <SectionHeader icon={<Crosshair size={16} />} title="Active Brackets" subtitle="Target/stop-loss orders placed from Scanner or Stock Report" />
+      {brackets.loading ? (
+        <LoadingRows rows={2} />
+      ) : brackets.error ? (
+        <ErrorState message={brackets.error} onRetry={brackets.reload} />
+      ) : active.length === 0 ? (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>No active brackets. Add one from a Buy/Sell order ticket.</p>
+      ) : (
+        <div className="space-y-2">
+          {active.map((b) => (
+            <div key={b.id} className="flex items-center justify-between gap-3 p-2.5 rounded-lg text-xs" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-subtle)" }}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <StockLink symbol={b.symbol} />
+                  <span className="badge badge-neutral">{b.provider}</span>
+                  {b.trailing_amount != null && <span className="badge badge-accent">Trailing ₹{fmtNum(b.trailing_amount)}</span>}
+                </div>
+                <p style={{ color: "var(--text-muted)" }}>
+                  Target {fmtINR(b.target_price)} · Stop {fmtINR(b.stop_price)}
+                  {b.last_trailed_at ? ` · last trailed ${timeAgo(b.last_trailed_at)}` : ""}
+                  {b.last_error ? ` · ⚠ ${b.last_error}` : ""}
+                </p>
+              </div>
+              <button className="btn-ghost text-xs shrink-0" onClick={() => cancel(b.id, b.symbol)} title="Cancel bracket">
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function RiskSettingsCard() {
   const { settings } = useAppStore();
@@ -37,6 +89,7 @@ function RiskSettingsCard() {
 
 export default function PortfolioView() {
   const { isAuthenticated, hydrated, toast } = useAppStore();
+  const navigate = useNavigateTab();
   const [busy, setBusy] = useState(false);
 
   const system = useApi(() => healthAPI.system(), [isAuthenticated], { enabled: hydrated });
@@ -102,14 +155,21 @@ export default function PortfolioView() {
           description={
             oauthReady
               ? "You'll be redirected to Upstox to approve read access. Market data already works through the analytics token; this adds your personal holdings and funds."
-              : "The server has no Upstox app credentials yet. Add UPSTOX_CLIENT_ID, UPSTOX_CLIENT_SECRET and UPSTOX_REDIRECT_URI (http://localhost:8000/api/auth/callback) to backend/.env and restart the backend."
+              : "The server has no Upstox app credentials yet. Add them in Settings → Broker API Credentials."
           }
           action={
-            <button className="btn-primary text-xs" onClick={connect} disabled={busy || !oauthReady}>
-              <Link2 size={14} /> {busy ? "Redirecting…" : "Connect Upstox"}
-            </button>
+            oauthReady ? (
+              <button className="btn-primary text-xs" onClick={connect} disabled={busy}>
+                <Link2 size={14} /> {busy ? "Redirecting…" : "Connect Upstox"}
+              </button>
+            ) : (
+              <button className="btn-primary text-xs" onClick={() => navigate("settings")}>
+                <Link2 size={14} /> Go to Broker API Credentials
+              </button>
+            )
           }
         />
+        <ActiveBracketsCard />
         <RiskSettingsCard />
       </div>
     );
@@ -204,6 +264,7 @@ export default function PortfolioView() {
               </div>
             )}
           </Card>
+          <ActiveBracketsCard />
           <RiskSettingsCard />
         </div>
       </div>

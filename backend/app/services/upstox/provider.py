@@ -18,6 +18,10 @@ logger = get_logger(__name__)
 # Symbol -> instrument record; stable, so cached for the process lifetime
 _instrument_cache: dict[str, dict[str, Any]] = {}
 
+# Order placement/modify/cancel live on a separate, lower-latency host than the rest
+# of the API (market data, portfolio, GTT) — confirmed against Upstox's v3 docs.
+ORDER_HOST = "https://api-hft.upstox.com"
+
 
 class UpstoxDataProvider:
     """
@@ -32,6 +36,8 @@ class UpstoxDataProvider:
 
     def __init__(self, access_token: Optional[str] = None):
         self._client = UpstoxClient(access_token=access_token)
+        # Plain order place/modify/cancel use api-hft.upstox.com, not api.upstox.com.
+        self._order_client = UpstoxClient(access_token=access_token, base_url=ORDER_HOST)
         self._access_token = access_token
 
     def with_token(self, access_token: str) -> "UpstoxDataProvider":
@@ -215,6 +221,123 @@ class UpstoxDataProvider:
         """Get Margin Trading Facility positions."""
         response = await self._client.get("/v3/portfolio/mtf-positions")
         return self._wrap_response(response, "mtf_positions")
+
+    # ================================================================
+    # ORDERS — places a real order against this provider's account token.
+    # Plain order place/modify/cancel use self._order_client (api-hft.upstox.com).
+    # GTT place/modify/cancel use self._client (api.upstox.com).
+    # ================================================================
+
+    async def place_order(
+        self,
+        instrument_token: str,
+        transaction_type: str,
+        quantity: int,
+        order_type: str,
+        product: str,
+        price: float = 0,
+        validity: str = "DAY",
+        trigger_price: float = 0,
+        disclosed_quantity: int = 0,
+        tag: str = "stockmind",
+    ) -> dict[str, Any]:
+        """Place a live order. `product` is Upstox's own code ("D"=delivery, "I"=intraday)."""
+        payload = {
+            "quantity": quantity,
+            "product": product,
+            "validity": validity,
+            "price": price,
+            "tag": tag,
+            "instrument_token": instrument_token,
+            "order_type": order_type,
+            "transaction_type": transaction_type,
+            "disclosed_quantity": disclosed_quantity,
+            "trigger_price": trigger_price,
+            "is_amo": False,
+        }
+        response = await self._order_client.post("/v3/order/place", json_data=payload)
+        return self._wrap_response(response, "order_place")
+
+    async def modify_order(
+        self,
+        order_id: str,
+        quantity: Optional[int] = None,
+        price: Optional[float] = None,
+        order_type: Optional[str] = None,
+        trigger_price: Optional[float] = None,
+        validity: str = "DAY",
+        disclosed_quantity: int = 0,
+    ) -> dict[str, Any]:
+        """Modify a pending/open plain order."""
+        payload: dict[str, Any] = {"order_id": order_id, "validity": validity, "disclosed_quantity": disclosed_quantity}
+        if quantity is not None:
+            payload["quantity"] = quantity
+        if price is not None:
+            payload["price"] = price
+        if order_type is not None:
+            payload["order_type"] = order_type
+        if trigger_price is not None:
+            payload["trigger_price"] = trigger_price
+        response = await self._order_client.put("/v3/order/modify", json_data=payload)
+        return self._wrap_response(response, "order_modify")
+
+    async def cancel_order(self, order_id: str) -> dict[str, Any]:
+        """Cancel a pending/open plain order."""
+        response = await self._order_client.delete(f"/v3/order/cancel?order_id={order_id}")
+        return self._wrap_response(response, "order_cancel")
+
+    async def place_gtt(
+        self,
+        instrument_token: str,
+        transaction_type: str,
+        quantity: int,
+        product: str,
+        entry_trigger_type: str,
+        entry_price: float,
+        target_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        trailing_gap: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """
+        Place a GTT order — Upstox's documented replacement for bracket/cover orders
+        (those aren't available via API at all). `type` is MULTIPLE whenever a target
+        and/or stop-loss accompanies the entry, else SINGLE (entry only). TARGET and
+        STOPLOSS rules must use trigger_type IMMEDIATE (Upstox's own requirement) —
+        ENTRY may be ABOVE/BELOW/IMMEDIATE. `trailing_gap` is native broker-side
+        trailing on the STOPLOSS leg; the broker keeps adjusting it, not us.
+        """
+        rules: list[dict[str, Any]] = [
+            {"strategy": "ENTRY", "trigger_type": entry_trigger_type, "trigger_price": entry_price}
+        ]
+        if target_price is not None:
+            rules.append({"strategy": "TARGET", "trigger_type": "IMMEDIATE", "trigger_price": target_price})
+        if stop_price is not None:
+            stoploss_rule: dict[str, Any] = {"strategy": "STOPLOSS", "trigger_type": "IMMEDIATE", "trigger_price": stop_price}
+            if trailing_gap:
+                stoploss_rule["trailing_gap"] = trailing_gap
+            rules.append(stoploss_rule)
+
+        payload = {
+            "type": "MULTIPLE" if len(rules) > 1 else "SINGLE",
+            "quantity": quantity,
+            "product": product,
+            "rules": rules,
+            "instrument_token": instrument_token,
+            "transaction_type": transaction_type,
+        }
+        response = await self._client.post("/v3/order/gtt/place", json_data=payload)
+        return self._wrap_response(response, "gtt_place")
+
+    async def modify_gtt(self, gtt_order_id: str, quantity: int, rules: list[dict[str, Any]], gtt_type: str = "MULTIPLE") -> dict[str, Any]:
+        """Modify a GTT order — the full rules array must be resent, not just the changed field."""
+        payload = {"type": gtt_type, "quantity": quantity, "rules": rules, "gtt_order_id": gtt_order_id}
+        response = await self._client.put("/v3/order/gtt/modify", json_data=payload)
+        return self._wrap_response(response, "gtt_modify")
+
+    async def cancel_gtt(self, gtt_order_id: str) -> dict[str, Any]:
+        """Cancel a GTT order."""
+        response = await self._client.delete("/v3/order/gtt/cancel", json_data={"gtt_order_id": gtt_order_id})
+        return self._wrap_response(response, "gtt_cancel")
 
     async def get_pnl(
         self,
@@ -543,5 +666,6 @@ class UpstoxDataProvider:
         }
 
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
+        """Close the underlying HTTP clients."""
         await self._client.close()
+        await self._order_client.close()

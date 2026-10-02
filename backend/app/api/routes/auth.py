@@ -22,7 +22,8 @@ from app.core.security import (
     verify_password,
 )
 from app.database import get_db
-from app.models.user import User
+from app.models.user import OAuthConnection, User
+from app.services.kite.auth import KiteAuthService
 from app.services.upstox.auth import UpstoxAuthService
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -159,13 +160,11 @@ async def upstox_callback(
 ):
     """
     Handle the Upstox OAuth callback: exchange the code for a token, store it
-    encrypted, then send the browser back to the app's portfolio view.
+    encrypted, then send the browser back to the app's settings view.
     """
-    from app.models.user import OAuthConnection
-
     def back_to_app(result: str, message: str = "") -> RedirectResponse:
         query = f"upstox={result}" + (f"&message={quote(message)}" if message else "")
-        return RedirectResponse(f"{settings.frontend_url}/?{query}#portfolio", status_code=302)
+        return RedirectResponse(f"{settings.frontend_url}/?{query}#settings", status_code=302)
 
     if error or not code or not state:
         return back_to_app("error", error or "Upstox did not return an authorization code.")
@@ -176,7 +175,44 @@ async def upstox_callback(
         return back_to_app("error", "Invalid or expired OAuth session. Please try connecting again.")
 
     try:
-        await UpstoxAuthService(db).handle_callback(conn.user_id, code, state)
+        await UpstoxAuthService(db).handle_callback(conn.id, code, state)
+    except ValueError as e:
+        return back_to_app("error", str(e)[:200])
+
+    return back_to_app("connected")
+
+
+@router.get("/kite/callback")
+async def kite_callback(
+    request_token: Optional[str] = Query(None),
+    kite_status: Optional[str] = Query(None, alias="status"),
+    action: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Handle the Kite Connect login redirect. Kite's redirect carries no state
+    of ours (see KiteAuthService docstring), so this resolves to the most
+    recently initiated, not-yet-completed Kite connection attempt.
+    """
+    def back_to_app(result: str, message: str = "") -> RedirectResponse:
+        query = f"kite={result}" + (f"&message={quote(message)}" if message else "")
+        return RedirectResponse(f"{settings.frontend_url}/?{query}#settings", status_code=302)
+
+    if kite_status == "error" or not request_token:
+        return back_to_app("error", "Kite did not return a request token.")
+
+    result = await db.execute(
+        select(OAuthConnection)
+        .where(OAuthConnection.provider == "kite", OAuthConnection.oauth_state.isnot(None))
+        .order_by(OAuthConnection.created_at.desc())
+        .limit(1)
+    )
+    conn = result.scalar_one_or_none()
+    if not conn:
+        return back_to_app("error", "No pending Kite connection found. Please try connecting again.")
+
+    try:
+        await KiteAuthService(db).handle_callback(conn.id, request_token)
     except ValueError as e:
         return back_to_app("error", str(e)[:200])
 

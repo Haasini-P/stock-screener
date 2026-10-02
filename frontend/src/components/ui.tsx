@@ -200,11 +200,13 @@ export function Modal({
   onClose,
   title,
   children,
+  maxWidth = "max-w-md",
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  maxWidth?: string;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -223,7 +225,7 @@ export function Modal({
       aria-modal="true"
       aria-label={title}
     >
-      <div className="glass-card-static w-full max-w-md p-5 animate-fade-in" style={{ background: "var(--bg-secondary)" }}>
+      <div className={`glass-card-static w-full ${maxWidth} p-5 animate-fade-in`} style={{ background: "var(--bg-secondary)" }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>{title}</h2>
           <button className="btn-ghost" onClick={onClose} aria-label="Close">

@@ -5,7 +5,6 @@ Uses champion/challenger model architecture.
 """
 
 import os
-import pickle
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -15,8 +14,14 @@ import pandas as pd
 
 from app.core.logging import get_logger
 from app.services.analytics.features import FeatureEngine
+from app.services.ml.champion_registry import manifest_path, read_manifest
 
 logger = get_logger(__name__)
+
+# Shared across all EnsemblePredictionEngine instances (it's constructed fresh
+# per request) — reloaded only when champion.json's mtime changes, same
+# lightweight-cache pattern as _instrument_cache in upstox/provider.py.
+_champion_cache: dict[str, Any] = {"mtime": None, "manifest": {}, "boosters": {}}
 
 
 # ============================================================
@@ -106,6 +111,7 @@ class PredictionResult:
             "model_version": self.model_version,
             "data_timestamp": self.data_timestamp,
             "explanation": self.explanation_text,
+            "feature_snapshot": self.feature_snapshot,
             "_disclaimer": (
                 "This is a model estimate with inherent uncertainty. "
                 "Probabilities reflect statistical patterns, not certainties. "
@@ -135,9 +141,40 @@ class EnsemblePredictionEngine:
 
     def __init__(self, model_registry_path: str = "./model_registry"):
         self.model_registry_path = model_registry_path
-        self._models: dict[str, Any] = {}
-        self._is_trained = False
-        self._model_version = "v0.1.0-statistical-baseline"
+
+    @property
+    def _is_trained(self) -> bool:
+        """True if at least one horizon has a promoted champion model."""
+        return bool(self._load_champion_manifest())
+
+    def _load_champion_manifest(self) -> dict[str, Any]:
+        """The champion.json manifest, reloaded only when the file changes on disk."""
+        path = manifest_path(self.model_registry_path)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            _champion_cache.update(mtime=None, manifest={}, boosters={})
+            return {}
+        if _champion_cache["mtime"] != mtime:
+            _champion_cache["manifest"] = read_manifest(self.model_registry_path)
+            _champion_cache["boosters"] = {}
+            _champion_cache["mtime"] = mtime
+        return _champion_cache["manifest"]
+
+    def _load_champion_boosters(self, horizon: str):
+        """(classifier, regressor) LightGBM boosters for a horizon, or None if no champion covers it."""
+        manifest = self._load_champion_manifest()
+        entry = manifest.get(horizon)
+        if not entry:
+            return None
+        if horizon not in _champion_cache["boosters"]:
+            import lightgbm as lgb
+            _champion_cache["boosters"][horizon] = (
+                lgb.Booster(model_file=entry["classifier"]),
+                lgb.Booster(model_file=entry["regressor"]),
+                entry["model_version_id"],
+            )
+        return _champion_cache["boosters"][horizon]
 
     def predict(
         self,
@@ -146,9 +183,9 @@ class EnsemblePredictionEngine:
         market_regime: str = "",
     ) -> PredictionResult:
         """
-        Generate a prediction for a single instrument.
-
-        If ML models are not trained, uses statistical baseline.
+        Generate a prediction for a single instrument. Uses the promoted
+        champion model for this horizon if one exists; otherwise (or if
+        inference fails) falls back to the statistical baseline.
         """
         result = PredictionResult(
             instrument_key=features.get("instrument_key", ""),
@@ -164,12 +201,7 @@ class EnsemblePredictionEngine:
             and v is not None and not (isinstance(v, float) and np.isnan(v))
         }
 
-        if self._is_trained:
-            result = self._predict_ensemble(features, result)
-        else:
-            result = self._predict_statistical_baseline(features, result)
-
-        result.model_version = self._model_version
+        result = self._predict_ensemble(features, result)
         result = self._generate_scenarios(features, result)
         result = self._generate_explanation(features, result)
 
@@ -293,6 +325,7 @@ class EnsemblePredictionEngine:
         else:
             result.signal = "neutral"
 
+        result.model_version = "v0.1.0-statistical-baseline"
         return result
 
     def _predict_ensemble(
@@ -301,12 +334,51 @@ class EnsemblePredictionEngine:
         result: PredictionResult,
     ) -> PredictionResult:
         """
-        Ensemble prediction using trained ML models.
-        Placeholder — activated after model training.
+        Prediction from the promoted champion model for this horizon, if one
+        exists and inference succeeds; otherwise the statistical baseline.
         """
-        # TODO: Implement after training pipeline (Phase 7)
-        # For now, fall back to statistical baseline
-        return self._predict_statistical_baseline(features, result)
+        boosters = self._load_champion_boosters(result.horizon)
+        if boosters is None:
+            return self._predict_statistical_baseline(features, result)
+        cls_booster, reg_booster, model_version_id = boosters
+
+        x = np.array([[
+            float(features[f]) if features.get(f) is not None and not (
+                isinstance(features.get(f), float) and np.isnan(features[f])
+            ) else 0.0
+            for f in FeatureEngine.get_feature_names()
+        ]])
+
+        try:
+            proba = cls_booster.predict(x)[0]  # [p_down, p_flat, p_up]
+            expected_return = float(reg_booster.predict(x)[0])
+        except Exception as e:
+            logger.warning("ensemble_predict_failed", horizon=result.horizon, error=str(e))
+            return self._predict_statistical_baseline(features, result)
+
+        result.prob_down, result.prob_flat, result.prob_up = [round(float(p), 4) for p in proba]
+        result.expected_return = round(expected_return, 6)
+
+        volatility = features.get("volatility_20d") or 0.25
+        horizon_days = int(result.horizon.replace("D", "") or 1)
+        daily_vol = volatility / np.sqrt(252) if volatility else 0.015
+        interval_width = daily_vol * np.sqrt(horizon_days) * 1.28
+        result.prediction_interval_lower = round(expected_return - interval_width, 6)
+        result.prediction_interval_upper = round(expected_return + interval_width, 6)
+
+        max_proba = float(max(proba))
+        result.confidence = "high" if max_proba > 0.65 else "moderate" if max_proba > 0.5 else "low"
+        result.risk = self._assess_risk(features)
+
+        if result.prob_up > 0.6:
+            result.signal = "potential_upside"
+        elif result.prob_down > 0.6:
+            result.signal = "potential_downside"
+        else:
+            result.signal = "neutral"
+
+        result.model_version = f"champion:{model_version_id}"
+        return result
 
     def _assess_risk(self, features: dict) -> str:
         """Assess risk level from feature data."""

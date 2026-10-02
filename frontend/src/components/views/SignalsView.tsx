@@ -6,6 +6,7 @@ import { signalsAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtINR, fmtNum, humanize } from "@/lib/format";
+import AICommentary from "../AICommentary";
 import { useNavigateTab } from "../AppShell";
 import { BucketChips, Card, Change, EmptyState, EntryBadge, ErrorState, KeyValue, LoadingRows, PageHeader, RefreshButton, StockLink } from "../ui";
 import { regimeColor } from "./DashboardView";
@@ -30,7 +31,7 @@ function SignalTable({ rows, showSizing }: { rows: any[]; showSizing: boolean })
         <thead>
           <tr>
             <th>Stock</th><th>Signal</th><th>CMP</th><th>Entry zone</th><th>Stop loss</th><th>Target 1</th><th>Target 2</th>
-            <th>R:R</th><th>P(up)</th>{showSizing && <><th>Qty</th><th>Value</th><th>Risk</th></>}<th>Setups</th>
+            <th>R:R</th><th>P(up)</th>{showSizing && <><th>Qty</th><th>Value</th><th>Risk</th></>}<th>Setups</th><th>AI</th>
           </tr>
         </thead>
         <tbody>
@@ -56,6 +57,7 @@ function SignalTable({ rows, showSizing }: { rows: any[]; showSizing: boolean })
                 </>
               )}
               <td><BucketChips buckets={s.buckets} /></td>
+              <td><AICommentary symbol={s.symbol} /></td>
             </tr>
           ))}
         </tbody>

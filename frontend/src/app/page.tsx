@@ -8,6 +8,8 @@ import DashboardView from "@/components/views/DashboardView";
 import NewsView from "@/components/views/NewsView";
 import PortfolioView from "@/components/views/PortfolioView";
 import PredictionsView from "@/components/views/PredictionsView";
+import PromptView from "@/components/views/PromptView";
+import ReportView from "@/components/views/ReportView";
 import ScannerView from "@/components/views/ScannerView";
 import SectorsView from "@/components/views/SectorsView";
 import SettingsView from "@/components/views/SettingsView";
@@ -24,6 +26,8 @@ const VIEWS: Record<Tab, () => React.JSX.Element> = {
   sectors: SectorsView,
   news: NewsView,
   alerts: AlertsView,
+  prompt: PromptView,
+  report: ReportView,
   settings: SettingsView,
 };
 
@@ -37,6 +41,8 @@ const TITLES: Record<Tab, string> = {
   sectors: "Sector Map",
   news: "News & Events",
   alerts: "Alerts",
+  prompt: "AI Prompt",
+  report: "Stock Report",
   settings: "Settings",
 };
 

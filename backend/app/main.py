@@ -3,6 +3,7 @@ StockMind AI — Main FastAPI Application
 Production-grade entry point with lifecycle management, CORS, middleware, and route registration.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -36,9 +37,19 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("database_init_skipped", error=str(e))
 
+    # Kite trailing stop-loss monitor (Upstox trails natively via GTT, no loop needed)
+    from app.services.trading.trailing_monitor import run_forever as run_trailing_monitor
+
+    trailing_task = asyncio.create_task(run_trailing_monitor(settings.trailing_poll_seconds))
+
     yield
 
     # Shutdown
+    trailing_task.cancel()
+    try:
+        await trailing_task
+    except asyncio.CancelledError:
+        pass
     await close_db()
     logger.info("application_stopped")
 
@@ -124,6 +135,13 @@ from app.api.routes.portfolio import router as portfolio_router
 from app.api.routes.websocket import router as ws_router
 from app.api.routes.signals import router as signals_router
 from app.api.routes.alerts import router as alerts_router
+from app.api.routes.prompt import router as prompt_router
+from app.api.routes.accounts import router as accounts_router
+from app.api.routes.orders import router as orders_router
+from app.api.routes.broker_settings import router as broker_settings_router
+from app.api.routes.ai_commentary import router as ai_commentary_router
+from app.api.routes.ml_training import router as ml_training_router
+from app.api.routes.system import router as system_router
 
 app.include_router(auth_router)
 app.include_router(market_router)
@@ -131,6 +149,13 @@ app.include_router(portfolio_router)
 app.include_router(ws_router)
 app.include_router(signals_router)
 app.include_router(alerts_router)
+app.include_router(prompt_router)
+app.include_router(accounts_router)
+app.include_router(orders_router)
+app.include_router(broker_settings_router)
+app.include_router(ai_commentary_router)
+app.include_router(ml_training_router)
+app.include_router(system_router)
 
 
 # --- Health & Observability Endpoints ---

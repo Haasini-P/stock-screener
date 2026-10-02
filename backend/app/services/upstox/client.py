@@ -75,8 +75,12 @@ class UpstoxClient:
     MAX_RETRIES = 3
     RATE_LIMIT_REQUESTS_PER_SEC = 25  # Stay under the 50/sec limit
 
-    def __init__(self, access_token: Optional[str] = None):
+    def __init__(self, access_token: Optional[str] = None, base_url: Optional[str] = None):
         self._access_token = access_token
+        # Instance override: order placement/modify/cancel live on a different host
+        # (api-hft.upstox.com) than everything else (api.upstox.com).
+        if base_url:
+            self.BASE_URL = base_url
         self._client: Optional[httpx.AsyncClient] = None
         self._request_timestamps: list[float] = []
         self._rate_limit_lock = asyncio.Lock()
@@ -242,10 +246,11 @@ class UpstoxClient:
     async def delete(
         self,
         path: str,
+        json_data: Optional[dict] = None,
         access_token: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Execute a DELETE request."""
-        return await self._request("DELETE", path, access_token=access_token)
+        """Execute a DELETE request (optionally with a JSON body, e.g. GTT cancel)."""
+        return await self._request("DELETE", path, access_token=access_token, json_data=json_data)
 
     async def close(self) -> None:
         """Close the HTTP client."""

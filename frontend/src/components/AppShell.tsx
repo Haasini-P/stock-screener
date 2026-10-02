@@ -14,6 +14,7 @@ import {
   Bell,
   BellRing,
   Brain,
+  FileText,
   Globe,
   LayoutDashboard,
   LogIn,
@@ -22,6 +23,7 @@ import {
   PieChart,
   Search,
   Settings as SettingsIcon,
+  Sparkles,
   User as UserIcon,
   UserPlus,
   Wallet,
@@ -44,6 +46,8 @@ export const NAV_ITEMS: { id: Tab; label: string; icon: typeof LayoutDashboard }
   { id: "sectors", label: "Sector Map", icon: PieChart },
   { id: "news", label: "News & Events", icon: Globe },
   { id: "alerts", label: "Alerts", icon: Bell },
+  { id: "prompt", label: "AI Prompt", icon: Sparkles },
+  { id: "report", label: "Stock Report", icon: FileText },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 

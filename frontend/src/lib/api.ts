@@ -129,6 +129,16 @@ export const signalsAPI = {
 };
 
 // ============================================================
+// AI PROMPT
+// ============================================================
+
+export const promptAPI = {
+  get: () => api.get("/api/prompt"),
+  update: (content: string) => api.put("/api/prompt", { content }),
+  suggest: () => api.post("/api/prompt/suggest"),
+};
+
+// ============================================================
 // ALERTS
 // ============================================================
 
@@ -161,6 +171,164 @@ export const portfolioAPI = {
 };
 
 // ============================================================
+// BROKER ACCOUNTS & ORDERS
+// ============================================================
+
+export interface BrokerAccount {
+  id: string;
+  provider: "upstox" | "kite";
+  nickname: string | null;
+  account_user_name: string | null;
+  account_email: string | null;
+  is_connected: boolean;
+  is_active: boolean;
+  connected_at: string | null;
+}
+
+export const accountsAPI = {
+  list: () => api.get<BrokerAccount[]>("/api/accounts"),
+  connectUpstox: (nickname?: string) => api.get("/api/accounts/upstox/connect", { params: { nickname } }),
+  connectKite: (nickname?: string) => api.get("/api/accounts/kite/connect", { params: { nickname } }),
+  activate: (id: string) => api.post(`/api/accounts/${id}/activate`),
+  remove: (id: string) => api.delete(`/api/accounts/${id}`),
+};
+
+export type OrderSide = "BUY" | "SELL";
+
+export interface OrderPayload {
+  account_id: string;
+  symbol: string;
+  transaction_type: OrderSide;
+  quantity: number;
+  order_type: "MARKET" | "LIMIT";
+  product: "DELIVERY" | "INTRADAY";
+  price?: number;
+  target_price?: number;
+  stop_price?: number;
+  trailing_amount?: number;
+}
+
+export interface TrackedBracket {
+  id: string;
+  provider: "upstox" | "kite";
+  symbol: string;
+  transaction_type: OrderSide;
+  quantity: number;
+  entry_price: number | null;
+  target_price: number | null;
+  stop_price: number | null;
+  trailing_amount: number | null;
+  status: "ACTIVE" | "TRIGGERED" | "CANCELLED" | "ERROR";
+  last_error: string | null;
+  last_trailed_at: string | null;
+  created_at: string | null;
+}
+
+export const ordersAPI = {
+  place: (payload: OrderPayload) => api.post("/api/orders/place", payload),
+  listBrackets: () => api.get<TrackedBracket[]>("/api/orders/brackets"),
+  cancelBracket: (id: string) => api.delete(`/api/orders/brackets/${id}`),
+};
+
+export interface BrokerCredentialStatus {
+  client_id: string;
+  redirect_uri: string;
+  has_secret: boolean;
+  configured: boolean;
+  source: "database" | "env";
+}
+
+export interface BrokerCredentialUpdate {
+  client_id: string;
+  client_secret?: string;
+  redirect_uri: string;
+}
+
+export const brokerSettingsAPI = {
+  get: () => api.get<{ upstox: BrokerCredentialStatus; kite: BrokerCredentialStatus }>("/api/settings/brokers"),
+  updateUpstox: (payload: BrokerCredentialUpdate) => api.put("/api/settings/brokers/upstox", payload),
+  updateKite: (payload: BrokerCredentialUpdate) => api.put("/api/settings/brokers/kite", payload),
+};
+
+export interface ModelPricing {
+  input: number;
+  output: number;
+}
+
+export interface AISettingsStatus {
+  has_key: boolean;
+  model: string;
+  configured: boolean;
+  pricing: Record<string, ModelPricing>;
+}
+
+export interface AICommentaryResult {
+  content: string;
+  model: string;
+  cached: boolean;
+  chart_included: boolean;
+  generated_at: string;
+}
+
+export interface AIBatchCommentaryResult {
+  content: string;
+  model: string;
+  cached: boolean;
+  symbols: string[];
+  generated_at: string;
+}
+
+export const aiSettingsAPI = {
+  get: () => api.get<AISettingsStatus>("/api/settings/ai"),
+  update: (payload: { api_key?: string; model: string }) => api.put("/api/settings/ai", payload),
+};
+
+export const MAX_BATCH_SYMBOLS = 8;
+
+export const aiAPI = {
+  getCommentary: (symbol: string) => api.post<AICommentaryResult>(`/api/ai/commentary/${encodeURIComponent(symbol)}`),
+  getBatchCommentary: (symbols: string[]) => api.post<AIBatchCommentaryResult>("/api/ai/commentary/batch", { symbols }),
+};
+
+// ============================================================
+// MODEL TRAINING
+// ============================================================
+
+export interface TrainingRunStatus {
+  id: string;
+  status: "running" | "completed" | "failed";
+  started_at: string | null;
+  completed_at: string | null;
+  training_data_rows: number | null;
+  test_data_rows: number | null;
+  metrics: { by_horizon: Record<string, { accuracy: number; log_loss: number; brier_up: number; train_rows: number; test_rows: number }>; avg_accuracy: number } | null;
+  error_message: string | null;
+  model_version_id: string | null;
+}
+
+export interface ModelVersionSummary {
+  id: string;
+  version: string;
+  status: "training" | "validating" | "champion" | "challenger" | "retired";
+  is_champion: boolean;
+  accuracy: number | null;
+  log_loss_score: number | null;
+  brier_score: number | null;
+  training_data_start: string | null;
+  training_data_end: string | null;
+  created_at: string | null;
+  promoted_at: string | null;
+  metrics_by_horizon: Record<string, { accuracy: number; log_loss: number; brier_up: number; train_rows: number; test_rows: number }> | null;
+}
+
+export const mlAPI = {
+  train: (payload?: { symbols?: string[]; lookback_days?: number }) => api.post<{ run_id: string }>("/api/ml/train", payload || {}),
+  getRun: (runId: string) => api.get<TrainingRunStatus>(`/api/ml/train/${runId}`),
+  listModels: () => api.get<ModelVersionSummary[]>("/api/ml/models"),
+  promote: (modelVersionId: string) => api.post(`/api/ml/models/${modelVersionId}/promote`),
+};
+
+// ============================================================
 // SYSTEM
 // ============================================================
 
@@ -168,6 +336,12 @@ export const healthAPI = {
   health: () => api.get("/health"),
   ready: () => api.get("/ready", { validateStatus: () => true }),
   system: () => api.get("/api/system/status"),
+};
+
+export type DevService = "backend" | "frontend" | "both";
+
+export const systemAPI = {
+  restart: (service: DevService) => api.post<{ status: string; service: DevService }>("/api/system/restart", { service }),
 };
 
 export default api;

@@ -7,29 +7,35 @@ Tokens are encrypted at rest and NEVER sent to the browser.
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlencode
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import decrypt_token, encrypt_token, generate_oauth_state
 from app.models.user import OAuthConnection
+from app.services.accounts import get_active_connection
+from app.services.broker_config import get_credentials as get_broker_credentials
 
 logger = get_logger(__name__)
-settings = get_settings()
 
 
 class UpstoxAuthService:
     """
-    Manages Upstox OAuth 2.0 authentication lifecycle.
+    Manages Upstox OAuth 2.0 authentication lifecycle. A user may link several
+    Upstox accounts (one row per login); `get_access_token`/`is_connected`/
+    `revoke_connection` operate on the user's *active* Upstox connection
+    (falling back to the most-recently-connected one) for backward-compatible,
+    single-account call sites (market data, portfolio). Multi-account
+    management (listing, activating, deleting a specific account) is exposed
+    separately for the Accounts API.
 
     Flow:
-    1. generate_auth_url() → redirect user to Upstox login
+    1. generate_auth_url() → redirect user to Upstox login (creates a new row)
     2. handle_callback() → exchange auth code for token, encrypt & store
-    3. get_access_token() → decrypt & return token for API calls
+    3. get_access_token() → decrypt & return the active account's token
     4. revoke_connection() → logout from Upstox & clear tokens
     """
 
@@ -40,49 +46,55 @@ class UpstoxAuthService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def generate_auth_url(self, user_id: UUID) -> str:
+    async def generate_auth_url(self, user_id: UUID, nickname: Optional[str] = None) -> str:
         """
-        Generate the Upstox OAuth authorization URL.
+        Generate the Upstox OAuth authorization URL for a NEW account link.
         Creates a state parameter for CSRF protection.
         """
-        if not settings.has_upstox_credentials:
+        creds = await get_broker_credentials(self.db, "upstox")
+        if not creds["configured"]:
             raise ValueError(
-                "Upstox API credentials not configured. "
-                "Set UPSTOX_CLIENT_ID and UPSTOX_CLIENT_SECRET in .env"
+                "Upstox API credentials not configured. Add them in Settings → Broker API "
+                "Credentials, or set UPSTOX_CLIENT_ID/UPSTOX_CLIENT_SECRET in backend/.env."
             )
 
         state = generate_oauth_state()
 
-        # Store state in the OAuth connection record
-        conn = await self._get_or_create_connection(user_id)
-        conn.oauth_state = state
+        conn = OAuthConnection(user_id=user_id, provider="upstox", nickname=nickname, oauth_state=state)
+        self.db.add(conn)
         await self.db.commit()
 
-        auth_url = (
-            f"{self.AUTH_URL}"
-            f"?client_id={settings.upstox_client_id}"
-            f"&redirect_uri={settings.upstox_redirect_uri}"
-            f"&response_type=code"
-            f"&state={state}"
-        )
+        params = urlencode({
+            "client_id": creds["client_id"],
+            "redirect_uri": creds["redirect_uri"],
+            "response_type": "code",
+            "state": state,
+        })
+        auth_url = f"{self.AUTH_URL}?{params}"
 
-        logger.info("oauth_auth_url_generated", user_id=str(user_id))
+        logger.info(
+            "oauth_auth_url_generated",
+            user_id=str(user_id),
+            client_id=creds["client_id"],
+            redirect_uri=creds["redirect_uri"],
+        )
         return auth_url
 
     async def handle_callback(
         self,
-        user_id: UUID,
+        connection_id: UUID,
         code: str,
         state: str,
     ) -> dict:
         """
-        Handle the OAuth callback from Upstox.
+        Handle the OAuth callback from Upstox for a specific pending connection.
         Validates state, exchanges code for token, encrypts & stores.
         """
-        # Validate state parameter
-        conn = await self._get_connection(user_id)
+        conn = await self.db.get(OAuthConnection, connection_id)
         if not conn or conn.oauth_state != state:
             raise ValueError("Invalid OAuth state parameter — possible CSRF attack")
+        user_id = conn.user_id
+        creds = await get_broker_credentials(self.db, "upstox")
 
         # Exchange authorization code for access token
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -90,9 +102,9 @@ class UpstoxAuthService:
                 self.TOKEN_URL,
                 data={
                     "code": code,
-                    "client_id": settings.upstox_client_id,
-                    "client_secret": settings.upstox_client_secret,
-                    "redirect_uri": settings.upstox_redirect_uri,
+                    "client_id": creds["client_id"],
+                    "client_secret": creds["client_secret"],
+                    "redirect_uri": creds["redirect_uri"],
                     "grant_type": "authorization_code",
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -123,10 +135,10 @@ class UpstoxAuthService:
         # Try to fetch user profile
         try:
             profile = await self._fetch_profile(access_token)
-            conn.upstox_user_id = profile.get("user_id")
-            conn.upstox_user_name = profile.get("user_name")
-            conn.upstox_email = profile.get("email")
-            conn.upstox_exchanges = str(profile.get("exchanges", []))
+            conn.account_user_id = profile.get("user_id")
+            conn.account_user_name = profile.get("user_name")
+            conn.account_email = profile.get("email")
+            conn.account_exchanges = str(profile.get("exchanges", []))
         except Exception as e:
             logger.warning("oauth_profile_fetch_failed", error=str(e))
 
@@ -135,21 +147,22 @@ class UpstoxAuthService:
         logger.info(
             "oauth_connection_established",
             user_id=str(user_id),
-            upstox_user=conn.upstox_user_id,
+            connection_id=str(conn.id),
+            upstox_user=conn.account_user_id,
         )
 
         return {
             "connected": True,
-            "upstox_user_id": conn.upstox_user_id,
-            "upstox_user_name": conn.upstox_user_name,
+            "upstox_user_id": conn.account_user_id,
+            "upstox_user_name": conn.account_user_name,
         }
 
     async def get_access_token(self, user_id: UUID) -> Optional[str]:
         """
-        Get the decrypted Upstox access token for a user.
-        Returns None if not connected.
+        Get the decrypted access token for the user's active (or most recently
+        connected) Upstox account. Returns None if no Upstox account is linked.
         """
-        conn = await self._get_connection(user_id)
+        conn = await get_active_connection(self.db, user_id, "upstox")
         if not conn or not conn.is_connected or not conn.access_token_encrypted:
             return None
 
@@ -160,8 +173,14 @@ class UpstoxAuthService:
             return None
 
     async def revoke_connection(self, user_id: UUID) -> None:
-        """Revoke Upstox connection and clear stored tokens."""
-        conn = await self._get_connection(user_id)
+        """Revoke the user's active Upstox connection and clear its stored tokens."""
+        conn = await get_active_connection(self.db, user_id, "upstox")
+        if conn:
+            await self.revoke_connection_by_id(conn.id)
+
+    async def revoke_connection_by_id(self, connection_id: UUID) -> None:
+        """Revoke a specific Upstox connection (logout + clear tokens) by its row id."""
+        conn = await self.db.get(OAuthConnection, connection_id)
         if not conn:
             return
 
@@ -181,37 +200,19 @@ class UpstoxAuthService:
         conn.access_token_encrypted = None
         conn.refresh_token_encrypted = None
         conn.is_connected = False
+        conn.is_active = False
         conn.disconnected_at = datetime.now(timezone.utc)
         conn.oauth_state = None
 
         await self.db.commit()
-        logger.info("oauth_connection_revoked", user_id=str(user_id))
+        logger.info("oauth_connection_revoked", connection_id=str(connection_id))
 
     async def is_connected(self, user_id: UUID) -> bool:
-        """Check if user has an active Upstox connection."""
-        conn = await self._get_connection(user_id)
+        """Check if the user has at least one connected Upstox account."""
+        conn = await get_active_connection(self.db, user_id, "upstox")
         return bool(conn and conn.is_connected and conn.access_token_encrypted)
 
     # --- Internal helpers ---
-
-    async def _get_or_create_connection(self, user_id: UUID) -> OAuthConnection:
-        """Get existing connection or create a new one."""
-        conn = await self._get_connection(user_id)
-        if conn is None:
-            conn = OAuthConnection(user_id=user_id, provider="upstox")
-            self.db.add(conn)
-            await self.db.flush()
-        return conn
-
-    async def _get_connection(self, user_id: UUID) -> Optional[OAuthConnection]:
-        """Get the Upstox OAuth connection for a user."""
-        result = await self.db.execute(
-            select(OAuthConnection).where(
-                OAuthConnection.user_id == user_id,
-                OAuthConnection.provider == "upstox",
-            )
-        )
-        return result.scalar_one_or_none()
 
     async def _fetch_profile(self, access_token: str) -> dict:
         """Fetch user profile from Upstox."""

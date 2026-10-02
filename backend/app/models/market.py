@@ -61,7 +61,11 @@ class Candle(Base):
 
     __tablename__ = "candles"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # Plain Integer, not BigInteger: SQLite only aliases a PRIMARY KEY column to
+    # its auto-incrementing rowid when it's declared as INTEGER — BigInteger
+    # (BIGINT) breaks that and every insert fails with "NOT NULL constraint
+    # failed: candles.id". Fine on Postgres too (SERIAL-equivalent either way).
+    id = Column(Integer, primary_key=True, autoincrement=True)
     instrument_key = Column(String(100), nullable=False, index=True)
     interval = Column(String(10), nullable=False)  # 1minute, 30minute, day, week, month
     timestamp = Column(DateTime(timezone=True), nullable=False)

@@ -20,6 +20,7 @@ from app.database import get_db
 from app.models.user import User
 from app.services.analytics.market_state import get_market_state
 from app.services.analytics.screener import SECTOR_UNIVERSE, MarketScreener, sector_summary
+from app.services.broker_config import get_credentials as get_broker_credentials
 from app.services.upstox.auth import UpstoxAuthService
 from app.services.upstox.client import UpstoxAPIError
 from app.services.upstox.provider import UpstoxDataProvider
@@ -115,10 +116,14 @@ async def system_status(
         except Exception:
             analytics = "error"
 
+    upstox_creds = await get_broker_credentials(db, "upstox")
+    kite_creds = await get_broker_credentials(db, "kite")
+
     return {
         "analytics_token": analytics,
-        "oauth_configured": settings.has_upstox_credentials,
+        "oauth_configured": upstox_creds["configured"],
         "user_upstox_connected": upstox_connected,
+        "kite_configured": kite_creds["configured"],
         "environment": settings.app_env,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -471,7 +476,7 @@ async def market_scanner(
             return False
         return True
 
-    filtered = [_without_evidence(r) for r in rows if keep(r)]
+    filtered = [r for r in rows if keep(r)]
     present = [r for r in filtered if r.get(sort_by) is not None]
     missing = [r for r in filtered if r.get(sort_by) is None]
     present.sort(key=lambda r: r[sort_by], reverse=(order == "desc"))

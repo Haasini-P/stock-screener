@@ -1,11 +1,15 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Download, RotateCcw, Search } from "lucide-react";
-import { marketAPI } from "@/lib/api";
+import { Fragment, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Download, RotateCcw, Search, Sparkles, TrendingDown, TrendingUp } from "lucide-react";
+import { marketAPI, MAX_BATCH_SYMBOLS } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtINR, fmtNum, fmtPct, humanize, toneColor } from "@/lib/format";
+import { buildRecommendation } from "@/lib/verdict";
+import AICommentary from "../AICommentary";
+import BatchAICommentary from "../BatchAICommentary";
+import OrderTicketDialog, { OrderDefaults } from "../OrderTicketDialog";
 import { BucketChips, Card, EmptyState, EntryBadge, ErrorState, LoadingRows, PageHeader, RefreshButton, StockLink } from "../ui";
 
 interface Filters {
@@ -39,8 +43,13 @@ const PRESETS: { label: string; filters: Partial<Filters> }[] = [
   { label: "Top losers", filters: { max_change: "0", sort_by: "change_pct", order: "asc" } },
 ];
 
+// "Trade" and "Why" are deliberately the 2nd/3rd columns (not the last) so the
+// Buy/Sell actions are visible without scrolling this wide table horizontally.
 const COLUMNS: { key: string; label: string; sortable?: boolean }[] = [
   { key: "symbol", label: "Stock", sortable: true },
+  { key: "trade", label: "Trade" },
+  { key: "why", label: "Why" },
+  { key: "entry", label: "Signal" },
   { key: "ltp", label: "LTP", sortable: true },
   { key: "change_pct", label: "Day %", sortable: true },
   { key: "return_5d", label: "5D %", sortable: true },
@@ -50,7 +59,6 @@ const COLUMNS: { key: string; label: string; sortable?: boolean }[] = [
   { key: "adx", label: "ADX", sortable: true },
   { key: "dist_52w_high", label: "From 52W H", sortable: true },
   { key: "trend", label: "Trend" },
-  { key: "entry", label: "Signal" },
   { key: "probability_up", label: "P(up)", sortable: true },
   { key: "buckets", label: "Setups" },
 ];
@@ -86,6 +94,22 @@ export default function ScannerView() {
   const [applied, setApplied] = useState<Filters>(EMPTY);
   const [rescans, setRescans] = useState(0);
   const refreshNext = useRef(false); // force a server-side rebuild on the next fetch only
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [order, setOrder] = useState<{ symbol: string; side: "BUY" | "SELL"; defaults: OrderDefaults } | null>(null);
+  const [batchSymbols, setBatchSymbols] = useState<string[] | null>(null);
+
+  const openOrder = (row: any, side: "BUY" | "SELL") =>
+    setOrder({
+      symbol: row.symbol,
+      side,
+      defaults: {
+        quantity: row.quantity || 1,
+        price: row.entry_zone?.[side === "BUY" ? 1 : 0] ?? row.ltp,
+        product: "DELIVERY",
+        target: side === "BUY" ? row.target_1 : undefined,
+        stopLoss: side === "BUY" ? row.stop_loss : undefined,
+      },
+    });
 
   const scan = useApi(() => {
     const refresh = refreshNext.current;
@@ -128,6 +152,18 @@ export default function ScannerView() {
         }
         actions={
           <>
+            <button
+              className="btn-secondary text-xs"
+              style={{ padding: "6px 12px" }}
+              onClick={() =>
+                rows.length
+                  ? setBatchSymbols(rows.slice(0, MAX_BATCH_SYMBOLS).map((r) => r.symbol))
+                  : toast("Nothing to analyze", "info")
+              }
+              title={`AI quick scan of the top ${MAX_BATCH_SYMBOLS} currently filtered/sorted stocks`}
+            >
+              <Sparkles size={13} /> Batch AI take
+            </button>
             <button className="btn-secondary text-xs" style={{ padding: "6px 12px" }} onClick={() => (rows.length ? exportCsv(rows) : toast("Nothing to export", "info"))}>
               <Download size={13} /> Export CSV
             </button>
@@ -253,24 +289,71 @@ export default function ScannerView() {
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.symbol}>
-                      <td>
-                        <StockLink symbol={r.symbol} />
-                        <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>{r.sector}</div>
-                      </td>
-                      <td className="tabular-nums">{fmtINR(r.ltp)}</td>
-                      <td className="tabular-nums" style={{ color: toneColor(r.change_pct) }}>{fmtPct(r.change_pct)}</td>
-                      <td className="tabular-nums" style={{ color: toneColor(r.return_5d) }}>{fmtPct(r.return_5d)}</td>
-                      <td className="tabular-nums" style={{ color: toneColor(r.return_20d) }}>{fmtPct(r.return_20d)}</td>
-                      <td className="tabular-nums" style={{ color: r.volume_ratio >= 2 ? "var(--color-neutral)" : undefined }}>{fmtNum(r.volume_ratio)}</td>
-                      <td className="tabular-nums" style={{ color: r.rsi > 70 ? "var(--color-bearish)" : r.rsi < 30 ? "var(--color-bullish)" : undefined }}>{fmtNum(r.rsi, 1)}</td>
-                      <td className="tabular-nums">{fmtNum(r.adx, 1)}</td>
-                      <td className="tabular-nums">{fmtPct(r.dist_52w_high)}</td>
-                      <td className="text-xs whitespace-nowrap">{r.trend}</td>
-                      <td><EntryBadge entry={r.entry} /></td>
-                      <td className="tabular-nums">{r.probability_up != null ? `${(r.probability_up * 100).toFixed(0)}%` : "—"}</td>
-                      <td><BucketChips buckets={r.buckets} /></td>
-                    </tr>
+                    <Fragment key={r.symbol}>
+                      <tr>
+                        <td>
+                          <StockLink symbol={r.symbol} />
+                          <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>{r.sector}</div>
+                        </td>
+                        <td>
+                          <div className="flex gap-1">
+                            <button
+                              className="btn-secondary text-xs"
+                              style={{ padding: "4px 8px", color: "var(--color-bullish)" }}
+                              onClick={() => openOrder(r, "BUY")}
+                              title={`Buy ${r.symbol}`}
+                            >
+                              <TrendingUp size={13} /> Buy
+                            </button>
+                            <button
+                              className="btn-secondary text-xs"
+                              style={{ padding: "4px 8px", color: "var(--color-bearish)" }}
+                              onClick={() => openOrder(r, "SELL")}
+                              title={`Sell ${r.symbol}`}
+                            >
+                              <TrendingDown size={13} /> Sell
+                            </button>
+                          </div>
+                        </td>
+                        <td>
+                          <button
+                            className="btn-ghost text-xs"
+                            style={{ padding: "4px 8px" }}
+                            onClick={() => setExpanded(expanded === r.symbol ? null : r.symbol)}
+                          >
+                            Why {expanded === r.symbol ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                          </button>
+                        </td>
+                        <td><EntryBadge entry={r.entry} /></td>
+                        <td className="tabular-nums">{fmtINR(r.ltp)}</td>
+                        <td className="tabular-nums" style={{ color: toneColor(r.change_pct) }}>{fmtPct(r.change_pct)}</td>
+                        <td className="tabular-nums" style={{ color: toneColor(r.return_5d) }}>{fmtPct(r.return_5d)}</td>
+                        <td className="tabular-nums" style={{ color: toneColor(r.return_20d) }}>{fmtPct(r.return_20d)}</td>
+                        <td className="tabular-nums" style={{ color: r.volume_ratio >= 2 ? "var(--color-neutral)" : undefined }}>{fmtNum(r.volume_ratio)}</td>
+                        <td className="tabular-nums" style={{ color: r.rsi > 70 ? "var(--color-bearish)" : r.rsi < 30 ? "var(--color-bullish)" : undefined }}>{fmtNum(r.rsi, 1)}</td>
+                        <td className="tabular-nums">{fmtNum(r.adx, 1)}</td>
+                        <td className="tabular-nums">{fmtPct(r.dist_52w_high)}</td>
+                        <td className="text-xs whitespace-nowrap">{r.trend}</td>
+                        <td className="tabular-nums">{r.probability_up != null ? `${(r.probability_up * 100).toFixed(0)}%` : "—"}</td>
+                        <td><BucketChips buckets={r.buckets} /></td>
+                      </tr>
+                      {expanded === r.symbol && (
+                        <tr>
+                          <td colSpan={COLUMNS.length} className="text-xs" style={{ background: "rgba(99, 102, 241, 0.04)" }}>
+                            <div className="py-2 px-1 space-y-2">
+                              <p style={{ color: "var(--text-primary)" }}>{buildRecommendation(r)}</p>
+                              <div className="flex flex-wrap gap-4 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                                <span>Entry zone: {r.entry_zone ? `${fmtNum(r.entry_zone[0])} – ${fmtNum(r.entry_zone[1])}` : "—"}</span>
+                                <span>Stop loss: {fmtNum(r.stop_loss)}</span>
+                                <span>Targets: {fmtNum(r.target_1)} / {fmtNum(r.target_2)}</span>
+                                <span>R:R: {r.risk_reward ? `1:${r.risk_reward}` : "—"}</span>
+                              </div>
+                              <AICommentary symbol={r.symbol} />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -278,6 +361,20 @@ export default function ScannerView() {
           )}
         </div>
       </Card>
+
+      {order && (
+        <OrderTicketDialog
+          open={!!order}
+          onClose={() => setOrder(null)}
+          symbol={order.symbol}
+          side={order.side}
+          defaults={order.defaults}
+        />
+      )}
+
+      {batchSymbols && (
+        <BatchAICommentary open={!!batchSymbols} onClose={() => setBatchSymbols(null)} symbols={batchSymbols} />
+      )}
     </div>
   );
 }

@@ -15,7 +15,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
 )
 from app.models.compat import CompatUUID as UUID
 from sqlalchemy.orm import relationship
@@ -48,13 +47,24 @@ class User(Base):
 
 
 class OAuthConnection(Base):
-    """Upstox OAuth connection for a user."""
+    """
+    A linked broker account (Upstox or Kite). A user may link several accounts
+    per provider — e.g. two Upstox logins and one Kite login — each identified
+    by its own row. Exactly one row (across all providers) may be `is_active`
+    at a time; that's the account order placement routes to by default.
+    """
 
     __tablename__ = "oauth_connections"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    provider = Column(String(50), nullable=False, default="upstox")
+    provider = Column(String(50), nullable=False, default="upstox")  # "upstox" | "kite"
+
+    # User-facing label for this account, e.g. "Main Upstox", "Dad's Kite"
+    nickname = Column(String(100), nullable=True)
+    # Exactly one connection per user should be active at a time (enforced in
+    # application code — see UpstoxAuthService.set_active)
+    is_active = Column(Boolean, default=False, nullable=False)
 
     # Encrypted tokens — NEVER stored in plaintext
     access_token_encrypted = Column(Text, nullable=True)
@@ -65,18 +75,18 @@ class OAuthConnection(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True)
     scopes = Column(Text, nullable=True)
 
-    # Upstox user info
-    upstox_user_id = Column(String(100), nullable=True)
-    upstox_user_name = Column(String(255), nullable=True)
-    upstox_email = Column(String(255), nullable=True)
-    upstox_exchanges = Column(Text, nullable=True)  # JSON array of enabled exchanges
+    # Broker account profile (generic — populated for both Upstox and Kite)
+    account_user_id = Column(String(100), nullable=True)
+    account_user_name = Column(String(255), nullable=True)
+    account_email = Column(String(255), nullable=True)
+    account_exchanges = Column(Text, nullable=True)  # JSON array of enabled exchanges
 
     # Connection state
     is_connected = Column(Boolean, default=False, nullable=False)
     connected_at = Column(DateTime(timezone=True), nullable=True)
     disconnected_at = Column(DateTime(timezone=True), nullable=True)
     last_token_refresh = Column(DateTime(timezone=True), nullable=True)
-    oauth_state = Column(String(255), nullable=True)  # CSRF protection
+    oauth_state = Column(String(255), nullable=True)  # CSRF protection (see KiteAuthService for a caveat)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -85,7 +95,6 @@ class OAuthConnection(Base):
     user = relationship("User", back_populates="oauth_connections")
 
     __table_args__ = (
-        UniqueConstraint("user_id", "provider", name="uq_user_provider"),
         Index("ix_oauth_user_provider", "user_id", "provider"),
     )
 

@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     upstox_sandbox_base_url: str = "https://sandbox.upstox.com"
     upstox_ws_base_url: str = "wss://api.upstox.com"
 
+    # --- Zerodha Kite Connect ---
+    # Kite has no per-request redirect param — kite_redirect_uri is reference-only:
+    # register this exact URL as the fixed redirect URL in the Kite Developer Console.
+    kite_api_key: str = ""
+    kite_api_secret: str = ""
+    kite_redirect_uri: str = "http://localhost:8000/api/auth/kite/callback"
+
+    # --- Trailing stop-loss monitor (Kite only — Upstox trails natively via GTT) ---
+    trailing_poll_seconds: int = 60
+
     # --- Database ---
     database_url: str = "sqlite+aiosqlite:///./stockmind.db"
     database_url_sync: str = "sqlite:///./stockmind.db"
@@ -57,6 +67,7 @@ class Settings(BaseSettings):
     # --- ML ---
     model_registry_path: str = "./model_registry"
     model_version: str = "v1.0.0"
+    ml_training_lookback_days: int = 750
 
     # --- Celery ---
     celery_broker_url: str = "redis://localhost:6379/2"
@@ -88,6 +99,10 @@ class Settings(BaseSettings):
     @property
     def has_upstox_credentials(self) -> bool:
         return bool(self.upstox_client_id and self.upstox_client_secret)
+
+    @property
+    def has_kite_credentials(self) -> bool:
+        return bool(self.kite_api_key and self.kite_api_secret)
 
 
 @lru_cache()
