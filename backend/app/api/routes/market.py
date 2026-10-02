@@ -455,6 +455,9 @@ async def market_scanner(
     provider = await get_market_provider(user, db)
     rows, meta = await get_screener_rows(provider, force=refresh)
 
+    from app.services.analytics.watchlist_service import sync_from_scan
+    await sync_from_scan(db, rows)
+
     def keep(r: dict) -> bool:
         if sector and r["sector"] != sector:
             return False

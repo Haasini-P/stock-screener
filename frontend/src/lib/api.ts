@@ -142,11 +142,11 @@ export const promptAPI = {
 // ALERTS
 // ============================================================
 
-export type AlertType = "price_above" | "price_below" | "change_above" | "change_below";
+export type AlertType = "price_above" | "price_below" | "change_above" | "change_below" | "signal_buy";
 
 export const alertsAPI = {
   list: () => api.get("/api/alerts"),
-  create: (body: { symbol: string; alert_type: AlertType; value: number; message?: string }) =>
+  create: (body: { symbol: string; alert_type: AlertType; value?: number; message?: string }) =>
     api.post("/api/alerts", body),
   update: (id: string, body: { is_active?: boolean; value?: number; message?: string }) =>
     api.put(`/api/alerts/${id}`, body),
@@ -342,6 +342,28 @@ export type DevService = "backend" | "frontend" | "both";
 
 export const systemAPI = {
   restart: (service: DevService) => api.post<{ status: string; service: DevService }>("/api/system/restart", { service }),
+};
+
+// ============================================================
+// WATCHLIST (scanner "added on" dates + short/mid/long segregation)
+// ============================================================
+
+export type WatchlistTerm = "short" | "mid" | "long";
+
+export interface WatchlistEntry {
+  symbol: string;
+  term: WatchlistTerm;
+  source: "auto" | "manual";
+  bucket: string | null;
+  added_by: string | null;
+  added_at: string;
+}
+
+export const watchlistAPI = {
+  list: () => api.get<{ items: WatchlistEntry[]; terms: WatchlistTerm[] }>("/api/watchlist"),
+  add: (symbol: string, term: WatchlistTerm) => api.post<WatchlistEntry>("/api/watchlist", { symbol, term }),
+  setTerm: (symbol: string, term: WatchlistTerm) => api.put<WatchlistEntry>(`/api/watchlist/${encodeURIComponent(symbol)}`, { term }),
+  remove: (symbol: string) => api.delete(`/api/watchlist/${encodeURIComponent(symbol)}`),
 };
 
 export default api;

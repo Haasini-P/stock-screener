@@ -12,6 +12,7 @@ import { useAppStore } from "@/lib/store";
 import { Modal } from "./ui";
 
 export const ALERT_TYPES: { value: AlertType; label: string; unit: string }[] = [
+  { value: "signal_buy", label: "Notify me on a BUY signal", unit: "" },
   { value: "price_above", label: "Price rises above", unit: "₹" },
   { value: "price_below", label: "Price falls below", unit: "₹" },
   { value: "change_above", label: "Day change above", unit: "%" },
@@ -23,27 +24,29 @@ export default function AlertDialog({
   onClose,
   symbol = "",
   currentPrice,
+  defaultType = "price_above",
   onCreated,
 }: {
   open: boolean;
   onClose: () => void;
   symbol?: string;
   currentPrice?: number | null;
+  defaultType?: AlertType;
   onCreated?: () => void;
 }) {
   const { isAuthenticated } = useAppStore();
   // Modal unmounts its children when closed, so the form starts fresh on every open
   return (
-    <Modal open={open} onClose={onClose} title="Create price alert">
+    <Modal open={open} onClose={onClose} title="Create alert">
       {!isAuthenticated ? (
         <div className="text-xs space-y-3" style={{ color: "var(--text-secondary)" }}>
-          <p>Alerts are saved to your account so they can be checked against live prices.</p>
+          <p>Alerts are saved to your account so they can be checked against live prices and signals.</p>
           <Link href="/login?next=%2F%23alerts" className="btn-primary text-xs inline-flex">
             Sign in to create alerts
           </Link>
         </div>
       ) : (
-        <AlertForm initialSymbol={symbol} currentPrice={currentPrice} onClose={onClose} onCreated={onCreated} />
+        <AlertForm initialSymbol={symbol} currentPrice={currentPrice} defaultType={defaultType} onClose={onClose} onCreated={onCreated} />
       )}
     </Modal>
   );
@@ -52,27 +55,33 @@ export default function AlertDialog({
 function AlertForm({
   initialSymbol,
   currentPrice,
+  defaultType,
   onClose,
   onCreated,
 }: {
   initialSymbol: string;
   currentPrice?: number | null;
+  defaultType: AlertType;
   onClose: () => void;
   onCreated?: () => void;
 }) {
   const { toast } = useAppStore();
   const [symbol, setSymbol] = useState(initialSymbol);
-  const [type, setType] = useState<AlertType>("price_above");
+  const [type, setType] = useState<AlertType>(defaultType);
   const [value, setValue] = useState(currentPrice ? String(Math.round(currentPrice * 1.05)) : "");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const needsValue = type !== "signal_buy";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const num = parseFloat(value);
     if (!symbol.trim()) return setError("Enter a stock symbol.");
-    if (Number.isNaN(num)) return setError("Enter a numeric value.");
+    let num: number | undefined;
+    if (needsValue) {
+      num = parseFloat(value);
+      if (Number.isNaN(num)) return setError("Enter a numeric value.");
+    }
     setSaving(true);
     setError("");
     try {
@@ -102,7 +111,7 @@ function AlertForm({
           required
         />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className={needsValue ? "grid grid-cols-2 gap-3" : ""}>
         <div>
           <label className="field-label" htmlFor="alert-type">Condition</label>
           <select id="alert-type" className="input" value={type} onChange={(e) => setType(e.target.value as AlertType)}>
@@ -111,24 +120,31 @@ function AlertForm({
             ))}
           </select>
         </div>
-        <div>
-          <label className="field-label" htmlFor="alert-value">Value ({unit})</label>
-          <input
-            id="alert-value"
-            className="input"
-            type="number"
-            step="any"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            required
-          />
-        </div>
+        {needsValue && (
+          <div>
+            <label className="field-label" htmlFor="alert-value">Value ({unit})</label>
+            <input
+              id="alert-value"
+              className="input"
+              type="number"
+              step="any"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              required
+            />
+          </div>
+        )}
       </div>
+      {type === "signal_buy" && (
+        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+          Fires the next time this stock&apos;s computed signal becomes BUY NOW, BUY ON RETEST or BUY ON DIP — the notification includes the entry zone, stop loss and target at that moment.
+        </p>
+      )}
       <div>
         <label className="field-label" htmlFor="alert-note">Note (optional)</label>
         <input id="alert-note" className="input" value={message} onChange={(e) => setMessage(e.target.value)} maxLength={500} />
       </div>
-      {currentPrice != null && (
+      {needsValue && currentPrice != null && (
         <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>Current price: ₹{currentPrice.toLocaleString("en-IN")}</p>
       )}
       {error && <p className="text-xs" style={{ color: "var(--color-bearish)" }}>{error}</p>}

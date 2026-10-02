@@ -1,90 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  Area,
-  Bar,
-  CartesianGrid,
-  ComposedChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { Activity, ArrowLeft, BellPlus, Brain, Building2, ExternalLink, Layers, Newspaper, Target, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowLeft, BellPlus, Brain, Building2, ExternalLink, Layers, Newspaper, Target, TrendingDown, TrendingUp } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import AlertDialog from "@/components/AlertDialog";
-import { Card, Change, EmptyState, EntryBadge, ErrorState, KeyValue, LoadingRows, RefreshButton, SectionHeader, Skeleton } from "@/components/ui";
+import CandlestickChart from "@/components/CandlestickChart";
+import { Card, EntryBadge, ErrorState, KeyValue, LoadingRows, RefreshButton, SectionHeader, Skeleton } from "@/components/ui";
 import { marketAPI, signalsAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtDate, fmtINR, fmtNum, fmtPct, fmtVolume, humanize, timeAgo, toneColor } from "@/lib/format";
 
-const RANGES = ["1D", "1M", "3M", "6M", "1Y", "5Y"] as const;
 const HORIZONS = ["1D", "3D", "5D", "10D", "20D"];
 
 function PriceChart({ symbol }: { symbol: string }) {
-  const [range, setRange] = useState<(typeof RANGES)[number]>("6M");
-  const interval = range === "5Y" ? "week" : range === "1D" ? "1minute" : "day";
-  const candles = useApi(() => marketAPI.candles(symbol, range, interval), [symbol, range]);
-  const data = useMemo(
-    () =>
-      (candles.data?.candles || []).map((c: any) => ({
-        ...c,
-        label:
-          range === "1D"
-            ? new Date(c.time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
-            : new Date(c.time).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: range === "5Y" || range === "1Y" ? "2-digit" : undefined }),
-      })),
-    [candles.data, range]
-  );
-  const first = data[0]?.close;
-  const last = data[data.length - 1]?.close;
-  const change = first && last ? ((last - first) / first) * 100 : null;
-  const color = change == null || change >= 0 ? "#22c55e" : "#ef4444";
-
   return (
     <Card>
-      <SectionHeader
-        icon={<Activity size={16} />}
-        title="Price chart"
-        subtitle={change != null ? <span>Change over {range}: <Change value={change} /></span> : undefined}
-        actions={RANGES.map((r) => (
-          <button key={r} className={`chip ${range === r ? "chip-active" : ""}`} onClick={() => setRange(r)}>{r}</button>
-        ))}
-      />
-      {candles.loading ? (
-        <Skeleton className="h-72 w-full" />
-      ) : candles.error ? (
-        <ErrorState message={candles.error} onRetry={candles.reload} />
-      ) : data.length === 0 ? (
-        <EmptyState title="No candles for this range" description={range === "1D" ? "Intraday data appears once the market opens." : undefined} />
-      ) : (
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data}>
-              <defs>
-                <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: "#565d73", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={40} />
-              <YAxis yAxisId="price" domain={["auto", "auto"]} orientation="right" tick={{ fill: "#565d73", fontSize: 11 }} axisLine={false} tickLine={false} width={60} />
-              <YAxis yAxisId="vol" hide domain={[0, (max: number) => max * 4]} />
-              <Tooltip
-                contentStyle={{ background: "#111318", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: "#f1f3f9" }}
-                formatter={(v: any, name: any) => (name === "volume" ? [fmtVolume(Number(v)), "Volume"] : [fmtINR(Number(v)), "Close"])}
-              />
-              <Bar yAxisId="vol" dataKey="volume" fill="rgba(99,102,241,0.25)" />
-              <Area yAxisId="price" type="monotone" dataKey="close" stroke={color} strokeWidth={2} fill="url(#priceFill)" dot={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+      <CandlestickChart symbol={symbol} />
     </Card>
   );
 }

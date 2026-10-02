@@ -1,16 +1,25 @@
 "use client";
 
 import { Fragment, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Download, RotateCcw, Search, Sparkles, TrendingDown, TrendingUp } from "lucide-react";
-import { marketAPI, MAX_BATCH_SYMBOLS } from "@/lib/api";
+import { ArrowDown, ArrowUp, BellPlus, ChevronDown, ChevronUp, Download, Plus, RotateCcw, Search, Sparkles, TrendingDown, TrendingUp, X } from "lucide-react";
+import { marketAPI, MAX_BATCH_SYMBOLS, watchlistAPI, WatchlistEntry, WatchlistTerm } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtINR, fmtNum, fmtPct, humanize, toneColor } from "@/lib/format";
+import { fmtDate, fmtINR, fmtNum, fmtPct, humanize, toneColor } from "@/lib/format";
 import { buildRecommendation } from "@/lib/verdict";
 import AICommentary from "../AICommentary";
+import AlertDialog from "../AlertDialog";
 import BatchAICommentary from "../BatchAICommentary";
 import OrderTicketDialog, { OrderDefaults } from "../OrderTicketDialog";
+import WatchlistAddDialog from "../WatchlistAddDialog";
 import { BucketChips, Card, EmptyState, EntryBadge, ErrorState, LoadingRows, PageHeader, RefreshButton, StockLink } from "../ui";
+
+const TERM_FILTERS: { value: "" | WatchlistTerm; label: string }[] = [
+  { value: "", label: "All terms" },
+  { value: "short", label: "Short term" },
+  { value: "mid", label: "Mid term" },
+  { value: "long", label: "Long term" },
+];
 
 interface Filters {
   q: string;
@@ -61,6 +70,8 @@ const COLUMNS: { key: string; label: string; sortable?: boolean }[] = [
   { key: "trend", label: "Trend" },
   { key: "probability_up", label: "P(up)", sortable: true },
   { key: "buckets", label: "Setups" },
+  { key: "term", label: "Term" },
+  { key: "added", label: "Added" },
 ];
 
 function toParams(f: Filters, refresh = false) {
@@ -70,6 +81,80 @@ function toParams(f: Filters, refresh = false) {
   }
   if (refresh) p.refresh = true;
   return p;
+}
+
+function TermCell({
+  symbol, term, onSetTerm, onRemove,
+}: {
+  symbol: string;
+  term?: WatchlistTerm;
+  onSetTerm: (symbol: string, term: WatchlistTerm) => void;
+  onRemove?: (symbol: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        className="input text-[11px]"
+        style={{ padding: "2px 4px", width: "auto" }}
+        value={term || ""}
+        onChange={(e) => e.target.value && onSetTerm(symbol, e.target.value as WatchlistTerm)}
+      >
+        <option value="" disabled>{term ? humanize(term) : "Track…"}</option>
+        <option value="short">Short</option>
+        <option value="mid">Mid</option>
+        <option value="long">Long</option>
+      </select>
+      {term && onRemove && (
+        <button className="btn-ghost" style={{ padding: 2 }} onClick={() => onRemove(symbol)} title="Remove from watchlist">
+          <X size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ExtraWatchlistRow({
+  symbol, item, onBuySell, onSetTerm, onRemove, onAlert,
+}: {
+  symbol: string;
+  item: WatchlistEntry;
+  onBuySell: (row: any, side: "BUY" | "SELL") => void;
+  onSetTerm: (symbol: string, term: WatchlistTerm) => void;
+  onRemove: (symbol: string) => void;
+  onAlert: (symbol: string) => void;
+}) {
+  const quote = useApi(() => marketAPI.quote(symbol), [symbol]);
+  const q = quote.data;
+  return (
+    <tr style={{ opacity: 0.8 }}>
+      <td>
+        <StockLink symbol={symbol} />
+        <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>Not in current scan results</div>
+      </td>
+      <td>
+        <div className="flex gap-1">
+          <button className="btn-secondary text-xs" style={{ padding: "4px 8px", color: "var(--color-bullish)" }} onClick={() => onBuySell({ symbol, ltp: q?.ltp }, "BUY")}>
+            <TrendingUp size={13} /> Buy
+          </button>
+          <button className="btn-secondary text-xs" style={{ padding: "4px 8px", color: "var(--color-bearish)" }} onClick={() => onBuySell({ symbol, ltp: q?.ltp }, "SELL")}>
+            <TrendingDown size={13} /> Sell
+          </button>
+          <button className="btn-ghost text-xs" style={{ padding: "4px 6px" }} onClick={() => onAlert(symbol)} title={`Notify me when ${symbol} becomes a BUY signal`}>
+            <BellPlus size={13} />
+          </button>
+        </div>
+      </td>
+      <td className="text-[10px]" style={{ color: "var(--text-muted)" }}>No signal data</td>
+      <td>—</td>
+      <td className="tabular-nums">{q ? fmtINR(q.ltp) : quote.loading ? "…" : "—"}</td>
+      <td className="tabular-nums" style={{ color: toneColor(q?.change_pct) }}>{q ? fmtPct(q.change_pct) : "—"}</td>
+      <td colSpan={9} className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+        Outside the live scan universe or current filters — no technicals computed for this symbol.
+      </td>
+      <td><TermCell symbol={symbol} term={item.term} onSetTerm={onSetTerm} onRemove={onRemove} /></td>
+      <td className="text-xs whitespace-nowrap">{fmtDate(item.added_at)}</td>
+    </tr>
+  );
 }
 
 function exportCsv(rows: any[]) {
@@ -97,6 +182,33 @@ export default function ScannerView() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [order, setOrder] = useState<{ symbol: string; side: "BUY" | "SELL"; defaults: OrderDefaults } | null>(null);
   const [batchSymbols, setBatchSymbols] = useState<string[] | null>(null);
+  const [termFilter, setTermFilter] = useState<"" | WatchlistTerm>("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [alertSymbol, setAlertSymbol] = useState<string | null>(null);
+
+  const watchlist = useApi(() => watchlistAPI.list(), []);
+  const watchlistBySymbol = useMemo(() => {
+    const m = new Map<string, WatchlistEntry>();
+    for (const item of watchlist.data?.items || []) m.set(item.symbol, item);
+    return m;
+  }, [watchlist.data]);
+
+  const setTerm = async (symbol: string, term: WatchlistTerm) => {
+    try {
+      await watchlistAPI.add(symbol, term);
+      watchlist.reload();
+    } catch (err: any) {
+      toast(err?.response?.data?.detail || "Could not update watchlist.", "error");
+    }
+  };
+  const removeFromWatchlist = async (symbol: string) => {
+    try {
+      await watchlistAPI.remove(symbol);
+      watchlist.reload();
+    } catch (err: any) {
+      toast(err?.response?.data?.detail || "Could not remove from watchlist.", "error");
+    }
+  };
 
   const openOrder = (row: any, side: "BUY" | "SELL") =>
     setOrder({
@@ -117,7 +229,19 @@ export default function ScannerView() {
     return marketAPI.scanner(toParams(applied, refresh));
   }, [applied, rescans]);
   const options = scan.data?.options;
-  const rows: any[] = scan.data?.results || [];
+  const scanRows: any[] = useMemo(() => scan.data?.results || [], [scan.data]);
+  const rows = useMemo(
+    () => (termFilter ? scanRows.filter((r) => watchlistBySymbol.get(r.symbol)?.term === termFilter) : scanRows),
+    [scanRows, termFilter, watchlistBySymbol]
+  );
+  // Manually-tracked symbols that don't currently pass the live screen at all —
+  // still shown (with live quote only, no technicals) so "add manually" actually works.
+  const extraSymbols = useMemo(() => {
+    const scanned = new Set(scanRows.map((r) => r.symbol));
+    return (watchlist.data?.items || [])
+      .filter((i) => !scanned.has(i.symbol) && (!termFilter || i.term === termFilter))
+      .map((i) => i.symbol);
+  }, [scanRows, watchlist.data, termFilter]);
 
   const set = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
   const apply = (f: Filters = filters) => setApplied(f);
@@ -152,6 +276,9 @@ export default function ScannerView() {
         }
         actions={
           <>
+            <button className="btn-secondary text-xs" style={{ padding: "6px 12px" }} onClick={() => setAddOpen(true)}>
+              <Plus size={13} /> Add to watchlist
+            </button>
             <button
               className="btn-secondary text-xs"
               style={{ padding: "6px 12px" }}
@@ -187,6 +314,18 @@ export default function ScannerView() {
             {p.label}
           </button>
         ))}
+      </div>
+
+      {/* Watchlist term segregation */}
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-3">
+        {TERM_FILTERS.map((t) => {
+          const count = t.value ? (watchlist.data?.items || []).filter((i) => i.term === t.value).length : watchlist.data?.items.length || 0;
+          return (
+            <button key={t.value || "all"} className={`chip ${termFilter === t.value ? "chip-active" : ""}`} onClick={() => setTermFilter(t.value)}>
+              {t.label} {count > 0 && <span style={{ opacity: 0.6 }}>({count})</span>}
+            </button>
+          );
+        })}
       </div>
 
       {/* Filters */}
@@ -255,7 +394,13 @@ export default function ScannerView() {
       {/* Results */}
       <Card padded={false}>
         <div className="px-5 py-3 border-b text-xs flex justify-between" style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>
-          <span>{scan.data ? `${scan.data.total} matching stocks` : "Scanning…"}</span>
+          <span>
+            {scan.data
+              ? termFilter
+                ? `${rows.length + extraSymbols.length} ${TERM_FILTERS.find((t) => t.value === termFilter)?.label.toLowerCase()} stocks`
+                : `${scan.data.total} matching stocks`
+              : "Scanning…"}
+          </span>
           <span>Click a column header to sort · click a stock for full analysis</span>
         </div>
         <div className="p-2">
@@ -263,7 +408,7 @@ export default function ScannerView() {
             <div className="p-3"><LoadingRows rows={8} /></div>
           ) : scan.error ? (
             <div className="p-3"><ErrorState message={scan.error} onRetry={scan.reload} /></div>
-          ) : rows.length === 0 ? (
+          ) : rows.length === 0 && extraSymbols.length === 0 ? (
             <div className="p-3">
               <EmptyState title="No stocks match these filters" description="Try widening the RSI or change range, or reset the filters." action={<button className="btn-secondary text-xs" onClick={() => preset({})}>Reset filters</button>} />
             </div>
@@ -313,6 +458,14 @@ export default function ScannerView() {
                             >
                               <TrendingDown size={13} /> Sell
                             </button>
+                            <button
+                              className="btn-ghost text-xs"
+                              style={{ padding: "4px 6px" }}
+                              onClick={() => setAlertSymbol(r.symbol)}
+                              title={`Notify me when ${r.symbol} becomes a BUY signal`}
+                            >
+                              <BellPlus size={13} />
+                            </button>
                           </div>
                         </td>
                         <td>
@@ -336,6 +489,15 @@ export default function ScannerView() {
                         <td className="text-xs whitespace-nowrap">{r.trend}</td>
                         <td className="tabular-nums">{r.probability_up != null ? `${(r.probability_up * 100).toFixed(0)}%` : "—"}</td>
                         <td><BucketChips buckets={r.buckets} /></td>
+                        <td>
+                          <TermCell
+                            symbol={r.symbol}
+                            term={watchlistBySymbol.get(r.symbol)?.term}
+                            onSetTerm={setTerm}
+                            onRemove={watchlistBySymbol.has(r.symbol) ? removeFromWatchlist : undefined}
+                          />
+                        </td>
+                        <td className="text-xs whitespace-nowrap">{fmtDate(watchlistBySymbol.get(r.symbol)?.added_at)}</td>
                       </tr>
                       {expanded === r.symbol && (
                         <tr>
@@ -355,6 +517,13 @@ export default function ScannerView() {
                       )}
                     </Fragment>
                   ))}
+                  {extraSymbols.map((symbol) => {
+                    const item = watchlistBySymbol.get(symbol);
+                    if (!item) return null;
+                    return (
+                      <ExtraWatchlistRow key={symbol} symbol={symbol} item={item} onBuySell={openOrder} onSetTerm={setTerm} onRemove={removeFromWatchlist} onAlert={setAlertSymbol} />
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -375,6 +544,10 @@ export default function ScannerView() {
       {batchSymbols && (
         <BatchAICommentary open={!!batchSymbols} onClose={() => setBatchSymbols(null)} symbols={batchSymbols} />
       )}
+
+      <WatchlistAddDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={() => watchlist.reload()} />
+
+      <AlertDialog open={!!alertSymbol} onClose={() => setAlertSymbol(null)} symbol={alertSymbol || ""} defaultType="signal_buy" />
     </div>
   );
 }

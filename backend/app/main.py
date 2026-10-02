@@ -142,6 +142,7 @@ from app.api.routes.broker_settings import router as broker_settings_router
 from app.api.routes.ai_commentary import router as ai_commentary_router
 from app.api.routes.ml_training import router as ml_training_router
 from app.api.routes.system import router as system_router
+from app.api.routes.watchlist import router as watchlist_router
 
 app.include_router(auth_router)
 app.include_router(market_router)
@@ -156,6 +157,7 @@ app.include_router(broker_settings_router)
 app.include_router(ai_commentary_router)
 app.include_router(ml_training_router)
 app.include_router(system_router)
+app.include_router(watchlist_router)
 
 
 # --- Health & Observability Endpoints ---

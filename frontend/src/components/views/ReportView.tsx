@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Download, FileText, Newspaper, Shield, Target, TrendingDown, TrendingUp } from "lucide-react";
+import { BellPlus, ChevronRight, Download, FileText, Newspaper, Shield, Target, TrendingDown, TrendingUp } from "lucide-react";
 import { marketAPI, signalsAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtDate, fmtINR, fmtNum, fmtPct, fmtVolume, humanize, timeAgo } from "@/lib/format";
 import { buildRecommendation, verdictColor, verdictLabel } from "@/lib/verdict";
 import AICommentary from "../AICommentary";
+import AlertDialog from "../AlertDialog";
+import CandlestickChart from "../CandlestickChart";
 import OrderTicketDialog, { OrderDefaults } from "../OrderTicketDialog";
 import SearchBox from "../SearchBox";
 import { Card, Change, EntryBadge, ErrorState, KeyValue, LoadingRows, PageHeader, SectionHeader } from "../ui";
@@ -113,6 +115,7 @@ export default function ReportView() {
   const [symbol, setSymbol] = useState("");
   const [recent, setRecent] = useState<string[]>(() => (typeof window !== "undefined" ? loadRecent() : []));
   const [order, setOrder] = useState<{ side: "BUY" | "SELL"; defaults: OrderDefaults } | null>(null);
+  const [alertOpen, setAlertOpen] = useState(false);
 
   const select = (s: string) => {
     setSymbol(s);
@@ -262,6 +265,9 @@ export default function ReportView() {
                 >
                   <TrendingDown size={13} /> Sell
                 </button>
+                <button className="btn-ghost text-xs" style={{ padding: "7px 10px" }} onClick={() => setAlertOpen(true)} title={`Notify me when ${symbol} becomes a BUY signal`}>
+                  <BellPlus size={13} />
+                </button>
               </div>
             </div>
           )}
@@ -270,6 +276,9 @@ export default function ReportView() {
               No signal data returned for {symbol} — Buy/Sell isn&apos;t available until the analysis loads successfully. Try reloading this report.
             </p>
           )}
+
+          {/* Chart analysis */}
+          <CandlestickChart symbol={symbol} />
 
           {/* Thesis */}
           {a.technical_summary && (
@@ -410,6 +419,8 @@ export default function ReportView() {
           defaults={order.defaults}
         />
       )}
+
+      <AlertDialog open={alertOpen} onClose={() => setAlertOpen(false)} symbol={symbol} currentPrice={q?.ltp} defaultType="signal_buy" />
     </div>
   );
 }

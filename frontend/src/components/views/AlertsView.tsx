@@ -6,13 +6,14 @@ import { Bell, BellPlus, CheckCircle2, Pause, Play, RefreshCw, Trash2 } from "lu
 import { alertsAPI, errorMessage } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtDate, timeAgo } from "@/lib/format";
+import { fmtDate, humanize, timeAgo } from "@/lib/format";
 import AlertDialog, { ALERT_TYPES } from "../AlertDialog";
 import { Card, EmptyState, ErrorState, LoadingRows, PageHeader, StockLink } from "../ui";
 
 function describe(a: any) {
   const t = ALERT_TYPES.find((x) => x.value === a.alert_type);
   if (!t) return a.alert_type;
+  if (a.alert_type === "signal_buy") return t.label;
   return t.unit === "₹" ? `${t.label} ₹${Number(a.value).toLocaleString("en-IN")}` : `${t.label} ${a.value}%`;
 }
 
@@ -33,7 +34,7 @@ export default function AlertsView() {
   if (hydrated && !isAuthenticated) {
     return (
       <div>
-        <PageHeader title="Alerts" subtitle="Price and day-change alerts evaluated against live Upstox quotes" />
+        <PageHeader title="Alerts" subtitle="Price, day-change and BUY-signal alerts evaluated against live Upstox data" />
         <EmptyState
           icon={<Bell size={28} />}
           title="Sign in to use alerts"
@@ -85,7 +86,7 @@ export default function AlertsView() {
     <div className="space-y-5">
       <PageHeader
         title="Alerts"
-        subtitle="Checked against live Upstox quotes every minute while the app is open"
+        subtitle="Checked against live quotes and computed signals every minute while the app is open"
         actions={
           <>
             <button className="btn-secondary text-xs" style={{ padding: "6px 12px" }} onClick={checkNow} disabled={checking || !list.length}>
@@ -131,7 +132,10 @@ export default function AlertsView() {
                       <td>
                         {a.is_triggered ? (
                           <span className="badge badge-bullish" title={fmtDate(a.triggered_at)}>
-                            <CheckCircle2 size={10} /> Triggered {timeAgo(a.triggered_at)}{a.triggered_price ? ` @ ₹${a.triggered_price}` : ""}
+                            <CheckCircle2 size={10} /> {a.entry_type ? humanize(a.entry_type) : "Triggered"} {timeAgo(a.triggered_at)}
+                            {a.triggered_price ? ` @ ₹${a.triggered_price}` : ""}
+                            {a.entry_zone ? ` · entry ₹${a.entry_zone[0]}–₹${a.entry_zone[1]}` : ""}
+                            {a.stop_loss ? ` · SL ₹${a.stop_loss}` : ""}
                           </span>
                         ) : a.is_active ? (
                           <span className="badge badge-info">Watching</span>

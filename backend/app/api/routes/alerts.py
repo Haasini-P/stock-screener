@@ -23,14 +23,17 @@ from app.models.user import Alert, User
 router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
 logger = get_logger(__name__)
 
-AlertType = Literal["price_above", "price_below", "change_above", "change_below"]
+AlertType = Literal["price_above", "price_below", "change_above", "change_below", "signal_buy"]
 MAX_ALERTS_PER_USER = 100
+# The same "actionable now" entry classifications the Scanner/Signals/Report badge as BUY —
+# see ENTRY_TYPES in app/api/routes/market.py.
+BUY_ENTRY_TYPES = {"BUY_NOW", "BUY_ON_RETEST", "BUY_ON_DIP"}
 
 
 class AlertCreate(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=50)
     alert_type: AlertType
-    value: float
+    value: Optional[float] = None  # not needed for signal_buy — it fires on the signal itself
     message: Optional[str] = Field(None, max_length=500)
 
 
@@ -58,6 +61,11 @@ def _serialize(alert: Alert) -> dict:
         "alert_type": alert.alert_type,
         "value": condition.get("value"),
         "triggered_price": condition.get("triggered_price"),
+        # Only populated for a triggered signal_buy alert:
+        "entry_type": condition.get("entry_type"),
+        "entry_zone": condition.get("entry_zone"),
+        "stop_loss": condition.get("stop_loss"),
+        "target_1": condition.get("target_1"),
         "message": alert.message,
         "is_active": alert.is_active,
         "is_triggered": alert.is_triggered,
@@ -92,8 +100,11 @@ async def create_alert(
     if len(existing.all()) >= MAX_ALERTS_PER_USER:
         raise HTTPException(status_code=400, detail=f"Alert limit reached ({MAX_ALERTS_PER_USER}).")
 
-    if body.alert_type.startswith("price") and body.value <= 0:
-        raise HTTPException(status_code=422, detail="Price alerts need a positive price.")
+    if body.alert_type != "signal_buy":
+        if body.value is None:
+            raise HTTPException(status_code=422, detail="This alert type needs a numeric value.")
+        if body.alert_type.startswith("price") and body.value <= 0:
+            raise HTTPException(status_code=422, detail="Price alerts need a positive price.")
 
     provider = await get_market_provider(user, db)
     instrument_key = await provider.resolve_instrument_key(body.symbol)  # validates the symbol
@@ -170,19 +181,21 @@ async def check_alerts(user: User = Depends(get_current_user), db: AsyncSession 
         )
     )
     pending = result.scalars().all()
+    price_alerts = [a for a in pending if a.alert_type != "signal_buy"]
+    signal_alerts = [a for a in pending if a.alert_type == "signal_buy"]
     newly_triggered = []
+    now = datetime.now(timezone.utc)
 
-    if pending:
+    if price_alerts:
         provider = await get_market_provider(user, db)
-        keys = sorted({a.instrument_key for a in pending if a.instrument_key})
+        keys = sorted({a.instrument_key for a in price_alerts if a.instrument_key})
         quotes = await provider.get_quotes(keys)
         by_key = {
             q["instrument_token"]: q
             for q in (quotes.get("data") or {}).values()
             if isinstance(q, dict) and q.get("instrument_token")
         }
-        now = datetime.now(timezone.utc)
-        for alert in pending:
+        for alert in price_alerts:
             q = by_key.get(alert.instrument_key)
             if not q or q.get("last_price") is None:
                 continue
@@ -196,9 +209,41 @@ async def check_alerts(user: User = Depends(get_current_user), db: AsyncSession 
                 alert.trigger_count = (alert.trigger_count or 0) + 1
                 alert.condition = json.dumps({**condition, "triggered_price": ltp})
                 newly_triggered.append(alert)
+
+    if signal_alerts:
+        from app.api.routes.signals import analyze_stock
+
+        for alert in signal_alerts:
+            try:
+                analysis = await analyze_stock(alert.symbol, 200000, 0.75, user, db)
+            except Exception as e:
+                logger.warning("signal_alert_check_failed", symbol=alert.symbol, error=str(e))
+                continue
+            s = (analysis.get("signal") or {}).get("signal") or {}
+            entry_type = s.get("entry")
+            if entry_type not in BUY_ENTRY_TYPES:
+                continue
+            ee = (analysis.get("signal") or {}).get("entry_exit") or {}
+            # analysis["quote"] is Upstox's raw get_quote() payload, keyed by "EXCHANGE:SYMBOL" —
+            # same shape analyze_stock itself unwraps internally.
+            raw_quote = next(iter((analysis.get("quote") or {}).values()), {}) or {}
+            condition = json.loads(alert.condition or "{}")
+            alert.is_triggered = True
+            alert.triggered_at = now
+            alert.trigger_count = (alert.trigger_count or 0) + 1
+            alert.condition = json.dumps({
+                **condition,
+                "entry_type": entry_type,
+                "entry_zone": ee.get("entry_zone"),
+                "stop_loss": ee.get("stop_loss"),
+                "target_1": ee.get("target_1"),
+                "triggered_price": raw_quote.get("last_price"),
+            })
+            newly_triggered.append(alert)
+
+    if newly_triggered:
         await db.flush()
-        if newly_triggered:
-            logger.info("alerts_triggered", user_id=str(user.id), count=len(newly_triggered))
+        logger.info("alerts_triggered", user_id=str(user.id), count=len(newly_triggered))
 
     triggered = await db.execute(
         select(Alert)

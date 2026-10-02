@@ -1,12 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { AlertTriangle, PiggyBank, Settings as SettingsIcon, Shield, Zap } from "lucide-react";
+import { AlertTriangle, BellPlus, PiggyBank, Settings as SettingsIcon, Shield, Zap } from "lucide-react";
 import { signalsAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtINR, fmtNum, humanize } from "@/lib/format";
 import AICommentary from "../AICommentary";
+import AlertDialog from "../AlertDialog";
 import { useNavigateTab } from "../AppShell";
 import { BucketChips, Card, Change, EmptyState, EntryBadge, ErrorState, KeyValue, LoadingRows, PageHeader, RefreshButton, StockLink } from "../ui";
 import { regimeColor } from "./DashboardView";
@@ -24,14 +25,14 @@ const GROUPS = [
   { key: "avoid", label: "🔴 Avoid" },
 ] as const;
 
-function SignalTable({ rows, showSizing }: { rows: any[]; showSizing: boolean }) {
+function SignalTable({ rows, showSizing, onAlert }: { rows: any[]; showSizing: boolean; onAlert: (symbol: string) => void }) {
   return (
     <div className="table-scroll">
       <table className="data-table">
         <thead>
           <tr>
             <th>Stock</th><th>Signal</th><th>CMP</th><th>Entry zone</th><th>Stop loss</th><th>Target 1</th><th>Target 2</th>
-            <th>R:R</th><th>P(up)</th>{showSizing && <><th>Qty</th><th>Value</th><th>Risk</th></>}<th>Setups</th><th>AI</th>
+            <th>R:R</th><th>P(up)</th>{showSizing && <><th>Qty</th><th>Value</th><th>Risk</th></>}<th>Setups</th><th>AI</th><th>Alert</th>
           </tr>
         </thead>
         <tbody>
@@ -58,6 +59,11 @@ function SignalTable({ rows, showSizing }: { rows: any[]; showSizing: boolean })
               )}
               <td><BucketChips buckets={s.buckets} /></td>
               <td><AICommentary symbol={s.symbol} /></td>
+              <td>
+                <button className="btn-ghost text-xs" style={{ padding: "4px 6px" }} onClick={() => onAlert(s.symbol)} title={`Notify me when ${s.symbol} becomes a BUY signal`}>
+                  <BellPlus size={13} />
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -73,6 +79,7 @@ export default function SignalsView() {
   const [group, setGroup] = useState<(typeof GROUPS)[number]["key"]>("watch_retest");
   const [view, setView] = useState<"horizon" | "action">("horizon");
   const [rebuilds, setRebuilds] = useState(0);
+  const [alertSymbol, setAlertSymbol] = useState<string | null>(null);
   const refreshNext = useRef(false);
 
   const daily = useApi(() => {
@@ -189,7 +196,7 @@ export default function SignalsView() {
               description={view === "horizon" ? "No setups meet the entry rules for this horizon. Cash is a valid position." : "Nothing classified under this action today."}
             />
           ) : (
-            <SignalTable rows={rows} showSizing={view === "horizon" || group !== "avoid"} />
+            <SignalTable rows={rows} showSizing={view === "horizon" || group !== "avoid"} onAlert={setAlertSymbol} />
           )}
         </div>
       </Card>
@@ -212,6 +219,8 @@ export default function SignalsView() {
         <Shield size={16} style={{ color: "var(--color-info)", flexShrink: 0, marginTop: 1 }} />
         <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{d?._disclaimer || "Probabilistic estimates only. Protect capital first."}</p>
       </div>
+
+      <AlertDialog open={!!alertSymbol} onClose={() => setAlertSymbol(null)} symbol={alertSymbol || ""} defaultType="signal_buy" />
     </div>
   );
 }
