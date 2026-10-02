@@ -1,0 +1,34 @@
+# Non-secret application config. Credentials and anything embedding a
+# password/token live in secret.example.yaml instead — see README.md.
+#
+# This deployment uses ONE public hostname for both frontend and backend
+# (Ingress path-routes /api, /health, /ready, /docs, /redoc, /openapi.json to
+# the backend and everything else to the frontend — same split as
+# nginx/nginx.conf in the docker-compose setup). That keeps the browser calls
+# same-origin, so CORS_ORIGINS only ever needs to list that one hostname.
+#
+# Replace stockmind.example.com everywhere in this file (and in ingress.yaml /
+# secret.example.yaml) with your real domain before applying.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stockmind-config
+  namespace: stockmind
+data:
+  APP_NAME: "StockMind AI"
+  APP_ENV: "production"
+  APP_DEBUG: "false"
+  APP_HOST: "0.0.0.0"
+  APP_PORT: "8000"
+  FRONTEND_URL: "https://stockmind.example.com"
+  CORS_ORIGINS: "https://stockmind.example.com"
+  UPSTOX_REDIRECT_URI: "https://stockmind.example.com/api/auth/callback"
+  KITE_REDIRECT_URI: "https://stockmind.example.com/api/auth/kite/callback"
+  MODEL_REGISTRY_PATH: "/app/model_registry"
+  MODEL_VERSION: "v1.0.0"
+  ML_TRAINING_LOOKBACK_DAYS: "750"
+  JWT_ALGORITHM: "HS256"
+  JWT_EXPIRATION_MINUTES: "1440"
+  TRAILING_POLL_SECONDS: "60"
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"

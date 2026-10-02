@@ -58,7 +58,25 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables (development only)."""
+    """
+    Create all tables (development only — see app/main.py's lifespan, which
+    only calls this when APP_ENV=development; a Kubernetes deployment runs
+    this once via k8s/db-init-job.yaml instead).
+
+    SQLAlchemy's create_all() only creates tables for models that have been
+    imported into the current process — it walks Base.metadata, which models
+    only register themselves into by being imported, not by existing on disk.
+    Importing every model module explicitly here means this is correct
+    regardless of what the caller happens to have already imported (app.models
+    .prompt.SystemPrompt used to go missing from fresh databases because
+    prompt_service.py only imports it lazily, inside a function, to avoid a
+    circular import — found by actually testing a from-scratch Postgres).
+    """
+    from app.models import (  # noqa: F401
+        ai_commentary, broker_credential, market, portfolio, prediction,
+        prompt, tracked_bracket, user, watchlist,
+    )
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

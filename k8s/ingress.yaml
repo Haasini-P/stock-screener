@@ -1,0 +1,50 @@
+# Replicates nginx/nginx.conf's routing (same host serves both, so the
+# frontend's API calls stay same-origin — see configmap.yaml's comment).
+# Requires an ingress controller (e.g. ingress-nginx) already installed on
+# the cluster; this resource alone does nothing without one.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: stockmind
+  namespace: stockmind
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"  # long-lived /ws/ connections
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Uncomment once cert-manager (or similar) is installed, to get a real TLS cert:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  # tls:
+  #   - hosts: ["stockmind.example.com"]
+  #     secretName: stockmind-tls
+  rules:
+    - host: stockmind.example.com  # replace with your real domain
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /ws
+            pathType: Prefix
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /health
+            pathType: Exact
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /ready
+            pathType: Exact
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /metrics
+            pathType: Exact
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /docs
+            pathType: Exact
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /redoc
+            pathType: Exact
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /openapi.json
+            pathType: Exact
+            backend: { service: { name: backend, port: { number: 8000 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: frontend, port: { number: 3000 } } }

@@ -31,4 +31,14 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Single worker, deliberately: uvicorn --workers spawns separate OS processes,
+# not threads, and this app keeps real state in-process — the market-scanner
+# cache (app/services/analytics/screener.py) and the trailing-stop-loss
+# monitor's poll loop (app/services/trading/trailing_monitor.py, started once
+# per process in app/main.py's lifespan). --workers 4 means 4 independent
+# copies of both: 4x the trailing-stop polling/order-adjustment calls against
+# the broker, and 4 scanners each with their own 5-minute cache going stale at
+# different times. Confirmed live — each worker logged its own
+# "trailing_monitor_started" on boot. Scale via more replicas/pods instead,
+# once that in-process state moves to the database or a shared cache.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

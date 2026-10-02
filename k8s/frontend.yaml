@@ -1,0 +1,46 @@
+# No envFrom here on purpose: NEXT_PUBLIC_API_URL is baked into the browser
+# bundle at `docker build` time (see frontend/Dockerfile), not read from the
+# running container — setting it as a pod env var here would do nothing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: stockmind
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: stockmind-frontend:latest  # built with --build-arg NEXT_PUBLIC_API_URL=... — see README.md
+          ports:
+            - containerPort: 3000
+          livenessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: stockmind
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 3000
+      targetPort: 3000

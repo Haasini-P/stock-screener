@@ -232,6 +232,20 @@ from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 ```
 
+### Kubernetes
+
+Same backend/frontend code and Dockerfiles, deployed as a Postgres + backend +
+frontend + Ingress stack (Redis/Celery are left out — nothing in the app
+actually uses them yet). Full build/push/deploy steps, required secrets, and
+a one-time database-init step that production mode needs, are all in
+[`k8s/README.md`](k8s/README.md).
+
+```bash
+cd k8s
+# then follow k8s/README.md — building images, creating secrets,
+# and applying the manifests in order
+```
+
 ---
 
 ## Data Integrity Rules

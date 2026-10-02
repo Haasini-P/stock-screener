@@ -5,6 +5,14 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Next.js inlines NEXT_PUBLIC_* vars into the browser bundle at BUILD time, not
+# read at container start — setting it only as a runtime env var on the
+# container (e.g. in docker-compose/Kubernetes) does nothing; the bundle was
+# already built with whatever was (or wasn't) present here. Must be passed as
+# a build arg: `docker build --build-arg NEXT_PUBLIC_API_URL=https://your-api.example.com`.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 FROM node:20-alpine AS runner

@@ -88,9 +88,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Baked into the browser bundle at build time (see frontend/Dockerfile) — must be
+        # reachable from the USER'S BROWSER, not just from inside the Docker network. The
+        # backend's port is also published to the host below, so localhost:8000 is correct
+        # for local `docker compose up`; change this for a real deployment (see k8s/README.md).
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     container_name: stockmind_frontend
-    environment:
-      NEXT_PUBLIC_API_URL: http://backend:8000
     ports:
       - "3000:3000"
     depends_on:

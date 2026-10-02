@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: stockmind
+spec:
+  # Single replica: model_registry below is ReadWriteOnce, and the scanner's
+  # cache + trailing-stop monitor (see app/main.py) are in-process, per-pod
+  # state today, not shared across replicas. Scaling beyond 1 needs a
+  # ReadWriteMany volume (or moving model storage to object storage) and
+  # moving that in-process state to Postgres/a real cache first.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: stockmind-backend:latest  # see README.md for building/pushing
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: stockmind-config }
+            - secretRef: { name: stockmind-secrets }
+          volumeMounts:
+            - name: model-registry
+              mountPath: /app/model_registry
+          # /health has no dependencies — a true liveness check (don't restart
+          # the pod just because Postgres had a blip).
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          # /ready exercises the real DB connection, but always returns HTTP 200
+          # (status: "ready"|"degraded" is only in the JSON body, which httpGet
+          # probes don't inspect) — and will permanently show redis:"error"
+          # since Redis isn't deployed here. That's expected, not a bug: this
+          # probe still gates on the pod actually being able to serve HTTP.
+          readinessProbe:
+            httpGet: { path: /ready, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1.5Gi" }
+      volumes:
+        - name: model-registry
+          persistentVolumeClaim:
+            claimName: model-registry
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-registry
+  namespace: stockmind
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: stockmind
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
