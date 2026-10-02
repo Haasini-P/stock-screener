@@ -1,15 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Crosshair, Link2, Link2Off, PieChart as PieIcon, ShieldAlert, Wallet, X } from "lucide-react";
+import { Crosshair, Link2, Link2Off, PieChart as PieIcon, PlusCircle, ShieldAlert, TrendingDown, Wallet, X } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { authAPI, errorMessage, healthAPI, ordersAPI, portfolioAPI } from "@/lib/api";
+import { authAPI, errorMessage, healthAPI, ordersAPI, portfolioAPI, PortfolioRecommendation } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtINR, fmtNum, fmtPct, timeAgo, toneColor } from "@/lib/format";
+import { fmtINR, fmtNum, fmtPct, humanize, timeAgo, toneColor } from "@/lib/format";
 import { useNavigateTab } from "../AppShell";
+import OrderTicketDialog, { OrderDefaults } from "../OrderTicketDialog";
 import { Card, EmptyState, ErrorState, KeyValue, LoadingRows, PageHeader, RefreshButton, SectionHeader, StockLink } from "../ui";
+
+const ACTION_BADGE: Record<string, string> = { ADD: "badge-bullish", HOLD: "badge-neutral", REDUCE: "badge-bearish" };
 
 const PIE_COLORS = ["#6366f1", "#22d3ee", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#ec4899", "#14b8a6", "#8b92a5"];
 
@@ -91,11 +94,20 @@ export default function PortfolioView() {
   const { isAuthenticated, hydrated, toast } = useAppStore();
   const navigate = useNavigateTab();
   const [busy, setBusy] = useState(false);
+  const [order, setOrder] = useState<{ symbol: string; side: "BUY" | "SELL"; defaults: OrderDefaults } | null>(null);
 
   const system = useApi(() => healthAPI.system(), [isAuthenticated], { enabled: hydrated });
   const connected = !!system.data?.user_upstox_connected;
   const portfolio = useApi(() => portfolioAPI.overview(), [connected], { enabled: hydrated && isAuthenticated && connected });
   const funds = useApi(() => portfolioAPI.funds(), [connected], { enabled: hydrated && isAuthenticated && connected });
+  // Separate, slower fetch — runs full signal analysis per holding (several Upstox calls
+  // each), so it's kept independent of the fast overview/funds calls above.
+  const recommendations = useApi(() => portfolioAPI.recommendations(), [connected], { enabled: hydrated && isAuthenticated && connected });
+  const recBySymbol = useMemo(() => {
+    const m = new Map<string, PortfolioRecommendation>();
+    for (const r of recommendations.data?.items || []) m.set(r.symbol, r);
+    return m;
+  }, [recommendations.data]);
 
   const connect = async () => {
     setBusy(true);
@@ -213,7 +225,12 @@ export default function PortfolioView() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <Card className="lg:col-span-2" padded={false}>
-          <div className="px-5 pt-4"><SectionHeader title={`Holdings (${holdings.length})`} /></div>
+          <div className="px-5 pt-4">
+            <SectionHeader
+              title={`Holdings (${holdings.length})`}
+              subtitle={recommendations.loading ? "Analyzing each holding for add/hold/reduce…" : undefined}
+            />
+          </div>
           <div className="px-3 pb-3">
             {portfolio.loading ? (
               <LoadingRows rows={5} />
@@ -222,9 +239,11 @@ export default function PortfolioView() {
             ) : (
               <div className="table-scroll">
                 <table className="data-table">
-                  <thead><tr><th>Stock</th><th>Qty</th><th>Avg</th><th>LTP</th><th>Value</th><th>P&L</th><th>Day %</th><th>Alloc</th></tr></thead>
+                  <thead><tr><th>Stock</th><th>Qty</th><th>Avg</th><th>LTP</th><th>Value</th><th>P&L</th><th>Day %</th><th>Alloc</th><th>Add or remove?</th></tr></thead>
                   <tbody>
-                    {holdings.map((h) => (
+                    {holdings.map((h) => {
+                      const rec = recBySymbol.get(h.symbol);
+                      return (
                       <tr key={h.instrument_key}>
                         <td><StockLink symbol={h.symbol} /></td>
                         <td className="tabular-nums">{h.quantity}</td>
@@ -234,8 +253,65 @@ export default function PortfolioView() {
                         <td className="tabular-nums" style={{ color: toneColor(h.pnl) }}>{fmtINR(h.pnl, 0)} ({fmtPct(h.pnl_percentage)})</td>
                         <td className="tabular-nums" style={{ color: toneColor(h.day_change_percentage) }}>{fmtPct(h.day_change_percentage)}</td>
                         <td className="tabular-nums">{fmtNum(h.allocation_pct, 1)}%</td>
+                        <td>
+                          {recommendations.loading && !rec ? (
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>…</span>
+                          ) : rec?.error ? (
+                            <span className="text-[10px]" style={{ color: "var(--text-muted)" }} title={rec.error}>Unavailable</span>
+                          ) : rec?.action ? (
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`badge ${ACTION_BADGE[rec.action]}`}
+                                title={rec.explanation || humanize(rec.entry || "")}
+                              >
+                                {rec.action}
+                              </span>
+                              {rec.action === "ADD" && (
+                                <button
+                                  className="btn-ghost text-xs"
+                                  style={{ padding: "2px 6px" }}
+                                  title={`Buy more ${h.symbol} — entry ${rec.entry_zone ? `₹${rec.entry_zone[0]}–₹${rec.entry_zone[1]}` : "—"}, stop ₹${rec.stop_loss ?? "—"}`}
+                                  onClick={() =>
+                                    setOrder({
+                                      symbol: h.symbol,
+                                      side: "BUY",
+                                      defaults: {
+                                        quantity: 1,
+                                        price: rec.entry_zone?.[1] ?? h.last_price,
+                                        product: "DELIVERY",
+                                        target: rec.target_1,
+                                        stopLoss: rec.stop_loss,
+                                      },
+                                    })
+                                  }
+                                >
+                                  <PlusCircle size={13} />
+                                </button>
+                              )}
+                              {rec.action === "REDUCE" && (
+                                <button
+                                  className="btn-ghost text-xs"
+                                  style={{ padding: "2px 6px", color: "var(--color-bearish)" }}
+                                  title={`Trim/exit ${h.symbol}`}
+                                  onClick={() =>
+                                    setOrder({
+                                      symbol: h.symbol,
+                                      side: "SELL",
+                                      defaults: { quantity: h.quantity, price: h.last_price, product: "DELIVERY" },
+                                    })
+                                  }
+                                >
+                                  <TrendingDown size={13} />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>
+                          )}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -293,6 +369,16 @@ export default function PortfolioView() {
           </div>
         )}
       </Card>
+
+      {order && (
+        <OrderTicketDialog
+          open={!!order}
+          onClose={() => setOrder(null)}
+          symbol={order.symbol}
+          side={order.side}
+          defaults={order.defaults}
+        />
+      )}
     </div>
   );
 }

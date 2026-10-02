@@ -115,7 +115,7 @@ async def list_models(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/models/{model_version_id}/promote")
-async def promote(model_version_id: UUID, db: AsyncSession = Depends(get_db)):
+async def promote(model_version_id: UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Make a challenger the live champion — the only thing that activates a trained model."""
     try:
         model = await promote_model(db, model_version_id)

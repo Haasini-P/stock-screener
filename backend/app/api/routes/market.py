@@ -458,6 +458,18 @@ async def market_scanner(
     from app.services.analytics.watchlist_service import sync_from_scan
     await sync_from_scan(db, rows)
 
+    # rows come from the process-wide screener cache (shared across every caller for up to
+    # SNAPSHOT_TTL_SECONDS) — holdings are per-user, so this overlay builds new dicts rather
+    # than mutating the cached ones, which would leak one user's holdings into another's view.
+    from app.services.analytics.signals import holding_action_for_entry
+    from app.services.portfolio_holdings import get_held_symbols
+    held = await get_held_symbols(user, db)
+    if held:
+        rows = [
+            {**r, "is_holding": r["symbol"] in held, "holding_action": holding_action_for_entry(r["entry"]) if r["symbol"] in held else None}
+            for r in rows
+        ]
+
     def keep(r: dict) -> bool:
         if sector and r["sector"] != sector:
             return False

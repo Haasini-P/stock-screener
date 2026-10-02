@@ -13,7 +13,6 @@ from app.services.analytics.signals import (
     ContinuityStatus,
     EntryClassification,
     PortfolioConfig,
-    SignalEngine,
     StockSignal,
     TimeHorizon,
 )
@@ -113,7 +112,6 @@ class DailyStockListService:
 
     def __init__(self, portfolio_config: Optional[PortfolioConfig] = None):
         self.portfolio_config = portfolio_config or PortfolioConfig()
-        self.signal_engine = SignalEngine(self.portfolio_config)
         self.regime_analyzer = MarketRegimeAnalyzer()
         self._previous_report: Optional[DailyStockListReport] = None
 
@@ -188,8 +186,10 @@ class DailyStockListService:
 
         candidates = []
         for r in rows:
-            if self.signal_engine.is_existing_holding(r.get("name", ""), r["symbol"]):
-                continue
+            # Existing holdings (tagged upstream from the user's live broker holdings — see
+            # app/services/portfolio_holdings.py) get the exact same bucket treatment as any
+            # other candidate now; _list_item carries is_holding/holding_action through so the
+            # UI can show "ADD"/"REDUCE" instead of a generic buy/avoid label for these rows.
             if r["entry"] == "AVOID":
                 report.avoid.append(self._list_item(r))
                 continue
@@ -273,6 +273,8 @@ class DailyStockListService:
             "risk_reward": r.get("risk_reward"),
             "buckets": r.get("buckets", []),
             "explanation": reason or r.get("explanation"),
+            "is_holding": r.get("is_holding", False),
+            "holding_action": r.get("holding_action"),
         }
 
     @staticmethod

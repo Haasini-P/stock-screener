@@ -110,22 +110,36 @@ APPROVED_SECTORS = [
 ]
 
 # ============================================================
-# EXISTING HOLDINGS (excluded from new recommendations)
+# EXISTING HOLDINGS — ADD / HOLD / REDUCE instead of blanket AVOID
 # ============================================================
+# A symbol currently held (per the user's live, connected broker account —
+# see app/services/portfolio_holdings.py) still gets the full normal
+# analysis; only the *label* changes, since "should I buy this fresh" and
+# "should I add to what I already hold" are different questions. Whether a
+# symbol counts as "held" is resolved by the caller and passed in via
+# generate_signal(held_symbols=...) — SignalEngine itself does no I/O.
 
-EXISTING_HOLDINGS = [
-    "Apollo Micro Systems", "Avantel", "BCL Industries",
-    "Bluspring Enterprises", "Delhivery",
-    "Diamond Power Infrastructure", "DIACABS",
-    "EMS Ltd", "Gandhar Oil Refinery",
-    "Garuda Construction & Engineering", "Goldiam International",
-    "Jai Balaji Industries", "JNK India",
-    "Kirloskar Electric Company", "Kirloskar Ferrous Industries",
-    "KPEL", "Prostarm Info Systems", "Rallis India",
-    "TARIL", "Transrail",
-]
+HOLDING_ACTION_FOR_ENTRY = {
+    EntryClassification.BUY_NOW: "ADD",
+    EntryClassification.BUY_ON_RETEST: "ADD",
+    EntryClassification.BUY_ON_DIP: "ADD",
+    EntryClassification.BREAKOUT_WATCH: "HOLD",
+    EntryClassification.WAIT: "HOLD",
+    EntryClassification.EXTENDED: "HOLD",
+    EntryClassification.AVOID: "REDUCE",
+}
 
-EXISTING_HOLDING_SYMBOLS = {h.upper() for h in EXISTING_HOLDINGS}
+
+def holding_action_for_entry(entry: "EntryClassification | str") -> str:
+    """ADD/HOLD/REDUCE for a held symbol, from its entry classification (enum or raw string —
+    the latter so route-level code can reuse this on cached scanner row dicts without
+    re-running the signal engine)."""
+    if isinstance(entry, str):
+        try:
+            entry = EntryClassification(entry)
+        except ValueError:
+            return "HOLD"
+    return HOLDING_ACTION_FOR_ENTRY.get(entry, "HOLD")
 
 
 # ============================================================
@@ -254,6 +268,11 @@ class StockSignal:
     catalyst: str = ""
     discovery_bucket: str = ""  # Which bucket found this stock
 
+    # Existing-holding context (set from the caller's live broker holdings, not
+    # looked up by SignalEngine itself — see holding_action_for_entry above)
+    is_holding: bool = False
+    holding_action: Optional[str] = None  # "ADD" | "HOLD" | "REDUCE", only when is_holding
+
     def to_dict(self) -> dict:
         """Serialize to dict, classifying FACT vs INTERPRETATION."""
         return {
@@ -315,6 +334,7 @@ class StockSignal:
             },
             "governance": self.governance_flags,
             "liquidity": self.liquidity,
+            "holding": {"is_holding": self.is_holding, "action": self.holding_action},
             "explanation": self.explanation,
             "thesis_invalidation": self.thesis_invalidation,
             "catalyst": self.catalyst,
@@ -356,15 +376,6 @@ class SignalEngine:
     def __init__(self, portfolio_config: Optional[PortfolioConfig] = None):
         self.portfolio_config = portfolio_config or PortfolioConfig()
 
-    def is_existing_holding(self, name: str, symbol: str = "") -> bool:
-        """Check if a stock is in the existing holdings exclusion list."""
-        name_upper = name.upper().strip()
-        symbol_upper = symbol.upper().strip()
-        for holding in EXISTING_HOLDING_SYMBOLS:
-            if holding in name_upper or holding in symbol_upper:
-                return True
-        return False
-
     def generate_signal(
         self,
         features: dict[str, Any],
@@ -374,12 +385,19 @@ class SignalEngine:
         sector_data: Optional[dict] = None,
         ml_prediction: Optional[dict] = None,
         options_data: Optional[dict] = None,
+        held_symbols: Optional[set[str]] = None,
     ) -> StockSignal:
         """
         Generate a comprehensive stock signal by combining all available evidence.
 
         This is NOT a simple if-else rule engine. It combines multiple
         factors with uncertainty quantification.
+
+        A symbol in `held_symbols` (the caller's live broker holdings — this
+        method does no I/O itself) still gets the full analysis below; only
+        the final entry classification gets relabeled (ADD/HOLD/REDUCE) for
+        display, since "buy fresh" and "add to an existing position" are
+        different questions with the same underlying technical answer.
         """
         signal = StockSignal(
             symbol=features.get("symbol", ""),
@@ -387,12 +405,7 @@ class SignalEngine:
             sector=features.get("sector", ""),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
-
-        # Check existing holding exclusion
-        if self.is_existing_holding(signal.name, signal.symbol):
-            signal.entry_classification = EntryClassification.AVOID
-            signal.explanation = "EXCLUDED — EXISTING HOLDING"
-            return signal
+        signal.is_holding = signal.symbol.upper() in (held_symbols or set())
 
         # --- Collect evidence ---
         evidence_scores = []
@@ -467,6 +480,8 @@ class SignalEngine:
         signal.entry_classification = self._classify_entry(
             composite_score, features, market_regime
         )
+        if signal.is_holding:
+            signal.holding_action = holding_action_for_entry(signal.entry_classification)
 
         # --- Set technical snapshot ---
         signal.rsi = features.get("rsi_14")

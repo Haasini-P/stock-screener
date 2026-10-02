@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
+from app.api.routes.signals import CapitalQuery, RiskQuery, analyze_stock
+from app.core.logging import get_logger
 from app.database import get_db
 from app.models.user import User
 from app.services.upstox.auth import UpstoxAuthService
@@ -17,6 +19,7 @@ from app.services.upstox.provider import UpstoxDataProvider
 from app.services.upstox.client import UpstoxDataUnavailableError, UpstoxAPIError
 
 router = APIRouter(prefix="/api/portfolio", tags=["Portfolio"])
+logger = get_logger(__name__)
 
 
 async def _get_user_provider(user: User, db: AsyncSession) -> UpstoxDataProvider:
@@ -149,6 +152,73 @@ async def get_holdings(
 
     except UpstoxDataUnavailableError:
         raise HTTPException(status_code=503, detail="Holdings data unavailable.")
+
+
+@router.get("/recommendations")
+async def portfolio_recommendations(
+    capital: float = CapitalQuery,
+    risk_pct: float = RiskQuery,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    For every real holding in the user's connected Upstox account, runs the
+    exact same signal analysis used everywhere else in the app (Scanner,
+    Daily Signals, Stock Report) and returns ADD/HOLD/REDUCE guidance —
+    "should I buy more of what I already own, or trim it" — instead of the
+    old behaviour of silently excluding holdings from analysis entirely.
+    """
+    try:
+        provider = await _get_user_provider(user, db)
+        holdings = await provider.get_holdings()
+    except UpstoxDataUnavailableError:
+        raise HTTPException(status_code=503, detail="Holdings data unavailable.")
+
+    rows = holdings.get("data") or []
+    items = []
+    for h in rows:
+        symbol = h.get("trading_symbol")
+        if not symbol:
+            continue
+        qty = h.get("quantity", 0)
+        avg_price = h.get("average_price", 0)
+        ltp = h.get("last_price", 0)
+        invested = qty * avg_price
+        current = qty * ltp
+        pnl = current - invested
+        item = {
+            "symbol": symbol,
+            "quantity": qty,
+            "average_price": avg_price,
+            "last_price": ltp,
+            "invested_value": round(invested, 2),
+            "current_value": round(current, 2),
+            "pnl": round(pnl, 2),
+            "pnl_percentage": round(pnl / invested * 100, 2) if invested else 0,
+            "action": None,
+            "error": None,
+        }
+        try:
+            analysis = await analyze_stock(symbol, capital, risk_pct, user, db)
+            s = analysis["signal"]
+            item.update({
+                "action": s["holding"]["action"],
+                "entry": s["signal"]["entry"],
+                "trend": s["technical"]["trend"],
+                "rsi": s["technical"]["rsi"],
+                "entry_zone": s["entry_exit"]["entry_zone"],
+                "stop_loss": s["entry_exit"]["stop_loss"],
+                "target_1": s["entry_exit"]["target_1"],
+                "confidence": s["prediction"]["confidence"],
+                "risk": s["prediction"]["risk"],
+                "explanation": s.get("explanation") or analysis.get("technical_summary"),
+            })
+        except Exception as e:
+            logger.warning("portfolio_recommendation_failed", symbol=symbol, error=str(e))
+            item["error"] = f"Could not analyze {symbol}: {e}"
+        items.append(item)
+
+    return {"items": items, "count": len(items)}
 
 
 @router.get("/positions")

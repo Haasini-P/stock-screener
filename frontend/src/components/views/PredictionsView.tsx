@@ -6,6 +6,7 @@ import { Brain, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
 import { marketAPI } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { fmtINR, fmtPct, humanize } from "@/lib/format";
+import { useNavigateTab } from "../AppShell";
 import SearchBox from "../SearchBox";
 import { Card, Change, EmptyState, ErrorState, LoadingRows, PageHeader, SectionHeader, StockLink } from "../ui";
 
@@ -45,6 +46,7 @@ async function fetchAllHorizons(symbol: string): Promise<{ data: Record<string, 
 }
 
 export default function PredictionsView() {
+  const navigate = useNavigateTab();
   const [symbol, setSymbol] = useState("");
   // This view only renders client-side (tabs are chosen after hydration)
   const [recent, setRecent] = useState<string[]>(() => (typeof window !== "undefined" ? loadRecent() : []));
@@ -107,12 +109,13 @@ export default function PredictionsView() {
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
-                    <tr><th>Horizon</th><th>Up</th><th>Flat</th><th>Down</th><th>Distribution</th><th>Expected return</th><th>Range (90%)</th><th>Signal</th></tr>
+                    <tr><th>Horizon</th><th>Up</th><th>Flat</th><th>Down</th><th>Distribution</th><th>Expected return</th><th>Range (90%)</th><th>Signal</th><th>Model</th></tr>
                   </thead>
                   <tbody>
                     {HORIZONS.filter((h) => results[h]).map((h) => {
                       const p = results[h];
                       const dp = p.direction_probabilities;
+                      const isChampion = typeof p.model_version === "string" && p.model_version.startsWith("champion:");
                       return (
                         <tr key={h}>
                           <td className="font-semibold">{h}</td>
@@ -128,6 +131,22 @@ export default function PredictionsView() {
                             <span className={`badge ${p.signal?.includes("upside") ? "badge-bullish" : p.signal?.includes("downside") ? "badge-bearish" : "badge-neutral"}`}>
                               {humanize(p.signal)}
                             </span>
+                          </td>
+                          <td>
+                            {isChampion ? (
+                              <span className="badge badge-bullish" title="A trained LightGBM model, backtested and promoted to champion for this horizon.">
+                                Trained model
+                              </span>
+                            ) : (
+                              <button
+                                className="badge badge-neutral"
+                                style={{ cursor: "pointer" }}
+                                onClick={() => navigate("settings")}
+                                title="No trained model has been promoted for this horizon yet — this is a rule-based statistical estimate, not a backtested model. Train one in Settings → Model Training."
+                              >
+                                Baseline only
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );

@@ -54,6 +54,17 @@ async def daily_stock_list(
     market_state = await get_market_state(provider, force=refresh)
     rows, meta = await get_screener_rows(provider, force=refresh)
 
+    # rows come from the process-wide screener cache — build new dicts rather than mutating
+    # the cached ones, same reasoning as the scanner route (holdings are per-user).
+    from app.services.analytics.signals import holding_action_for_entry
+    from app.services.portfolio_holdings import get_held_symbols
+    held = await get_held_symbols(user, db)
+    if held:
+        rows = [
+            {**r, "is_holding": r["symbol"] in held, "holding_action": holding_action_for_entry(r["entry"]) if r["symbol"] in held else None}
+            for r in rows
+        ]
+
     today = date.today().isoformat()
     previous_dates = sorted(d for d in _daily_history if d < today)
     previous = _daily_history[previous_dates[-1]] if previous_dates else []
@@ -133,7 +144,12 @@ async def analyze_stock(
     state = await get_market_state(provider)
     regime = {r.value: r for r in MarketRegime}.get(state["regime"].get("regime"))
 
-    signal = SignalEngine(_portfolio_config(capital, risk_pct)).generate_signal(latest, market_regime=regime)
+    from app.services.portfolio_holdings import get_held_symbols
+    held_symbols = await get_held_symbols(user, db)
+
+    signal = SignalEngine(_portfolio_config(capital, risk_pct)).generate_signal(
+        latest, market_regime=regime, held_symbols=held_symbols
+    )
     signal.instrument_key = instrument_key
     signal.isin = inst.get("isin", "")
 

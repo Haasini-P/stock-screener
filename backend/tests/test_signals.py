@@ -10,7 +10,7 @@ from app.services.analytics.signals import (
     EntryClassification,
     MarketRegime,
     SignalType,
-    EXISTING_HOLDINGS,
+    holding_action_for_entry,
 )
 
 
@@ -45,20 +45,48 @@ class TestSignalEngine:
     def setup_method(self):
         self.engine = SignalEngine()
 
-    def test_existing_holding_excluded(self):
-        assert self.engine.is_existing_holding("Apollo Micro Systems") is True
-        assert self.engine.is_existing_holding("Reliance Industries") is False
-        assert self.engine.is_existing_holding("TRANSRAIL") is True
-
-    def test_generate_signal_excludes_holding(self):
+    def test_holding_gets_full_analysis_not_blanket_avoid(self):
+        """A held symbol must still get a real computed signal — see
+        holding_action_for_entry for how it's relabeled for display."""
         features = {
-            "symbol": "APOLLOMICRO",
-            "name": "Apollo Micro Systems",
-            "close": 100,
+            "symbol": "RELIANCE",
+            "name": "Reliance Industries",
+            "sector": "Energy",
+            "close": 2500,
+            "sma_20": 2450,
+            "sma_50": 2400,
+            "sma_200": 2200,
+            "rsi_14": 62,
+            "macd_histogram": 5.0,
+            "adx": 28,
+            "volume_ratio": 2.2,
+            "volatility_percentile": 0.4,
+            "atr_14": 30,
+            "support_1": 2420,
+            "resistance_1": 2580,
+            "return_5d": 0.03,
         }
-        signal = self.engine.generate_signal(features)
-        assert signal.entry_classification == EntryClassification.AVOID
-        assert "EXISTING HOLDING" in signal.explanation
+        not_held = self.engine.generate_signal(features)
+        held = self.engine.generate_signal(features, held_symbols={"RELIANCE"})
+
+        assert not_held.is_holding is False
+        assert not_held.holding_action is None
+        assert held.is_holding is True
+        # Same technicals in, same entry classification out — only the holding label differs.
+        assert held.entry_classification == not_held.entry_classification
+        assert held.holding_action == holding_action_for_entry(held.entry_classification)
+
+    def test_holding_action_mapping(self):
+        assert holding_action_for_entry(EntryClassification.BUY_NOW) == "ADD"
+        assert holding_action_for_entry(EntryClassification.BUY_ON_RETEST) == "ADD"
+        assert holding_action_for_entry(EntryClassification.BUY_ON_DIP) == "ADD"
+        assert holding_action_for_entry(EntryClassification.WAIT) == "HOLD"
+        assert holding_action_for_entry(EntryClassification.BREAKOUT_WATCH) == "HOLD"
+        assert holding_action_for_entry(EntryClassification.EXTENDED) == "HOLD"
+        assert holding_action_for_entry(EntryClassification.AVOID) == "REDUCE"
+        # Also accepts the raw string form (used by route-level code on cached row dicts)
+        assert holding_action_for_entry("BUY_NOW") == "ADD"
+        assert holding_action_for_entry("AVOID") == "REDUCE"
 
     def test_generate_signal_basic(self):
         features = {
@@ -138,7 +166,22 @@ class TestSignalEngine:
 
 
 class TestExistingHoldings:
-    def test_all_holdings_recognized(self):
+    """
+    Holdings are no longer a hardcoded list — "is this held" is resolved by
+    the caller from the user's live, connected broker account (see
+    app/services/portfolio_holdings.py) and passed into generate_signal() as
+    held_symbols. SignalEngine itself does no holdings lookup or I/O.
+    """
+
+    def test_held_symbols_is_exact_match_not_substring(self):
         engine = SignalEngine()
-        for holding in EXISTING_HOLDINGS:
-            assert engine.is_existing_holding(holding), f"{holding} not recognized"
+        held = engine.generate_signal(
+            {"symbol": "TCS", "name": "Tata Consultancy Services", "close": 100},
+            held_symbols={"TCS"},
+        )
+        not_held = engine.generate_signal(
+            {"symbol": "TCSADV", "name": "Some Other Company", "close": 100},
+            held_symbols={"TCS"},
+        )
+        assert held.is_holding is True
+        assert not_held.is_holding is False

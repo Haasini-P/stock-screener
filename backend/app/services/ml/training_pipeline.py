@@ -35,9 +35,19 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 HORIZON_DAYS = {"1D": 1, "3D": 3, "5D": 5, "10D": 10, "20D": 20}
-# Fixed +/-1% bucket for up/flat/down across all horizons — a deliberate v1
-# simplification (a real model would scale this with horizon/volatility).
+# +/-1% at the 1-day horizon, scaled by sqrt(horizon_days) for longer ones —
+# the same sqrt-of-time scaling already used for prediction intervals in
+# prediction_engine.py. A FLAT fixed 1% band across every horizon (the
+# previous approach) makes "flat" nearly vanish by 20D (normal drift clears
+# 1% over 20 days almost every time), turning the up/down label into a coin
+# flip around a threshold smaller than the noise — which is why the trained
+# model's predictions used to flip incoherently between adjacent horizons for
+# the same stock (e.g. 89% down at 10D, 75% up at 20D on identical inputs).
 FLAT_BAND = 0.01
+
+
+def _flat_band_for_horizon(days: int) -> float:
+    return FLAT_BAND * (days ** 0.5)
 FEATURE_NAMES = FeatureEngine.get_feature_names()
 
 
@@ -61,8 +71,9 @@ async def _load_symbol_frame(db: AsyncSession, instrument_key: str) -> pd.DataFr
 
     for horizon, days in HORIZON_DAYS.items():
         future_return = df["close"].shift(-days) / df["close"] - 1
+        band = _flat_band_for_horizon(days)
         df[f"ret_{horizon}"] = future_return
-        df[f"label_{horizon}"] = np.where(future_return > FLAT_BAND, 2, np.where(future_return < -FLAT_BAND, 0, 1))
+        df[f"label_{horizon}"] = np.where(future_return > band, 2, np.where(future_return < -band, 0, 1))
 
     df["date"] = pd.to_datetime(df["timestamp"]).dt.date
     return df

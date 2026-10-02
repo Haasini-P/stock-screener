@@ -158,10 +158,33 @@ export const alertsAPI = {
 // PORTFOLIO
 // ============================================================
 
+export interface PortfolioRecommendation {
+  symbol: string;
+  quantity: number;
+  average_price: number;
+  last_price: number;
+  invested_value: number;
+  current_value: number;
+  pnl: number;
+  pnl_percentage: number;
+  action: "ADD" | "HOLD" | "REDUCE" | null;
+  entry?: string;
+  trend?: string;
+  rsi?: number;
+  entry_zone?: [number, number];
+  stop_loss?: number;
+  target_1?: number;
+  confidence?: string;
+  risk?: string;
+  explanation?: string;
+  error: string | null;
+}
+
 export const portfolioAPI = {
   overview: () => api.get("/api/portfolio"),
   holdings: () => api.get("/api/portfolio/holdings"),
   positions: () => api.get("/api/portfolio/positions"),
+  recommendations: () => api.get<{ items: PortfolioRecommendation[]; count: number }>("/api/portfolio/recommendations", { timeout: 120000 }),
   pnl: (fromDate: string, toDate: string, segment = "EQ") =>
     api.get("/api/portfolio/pnl", {
       params: { from_date: fromDate, to_date: toDate, segment },

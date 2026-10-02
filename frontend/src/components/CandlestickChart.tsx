@@ -5,13 +5,15 @@
  * 20/50/200-day moving averages, built straight from the same Upstox candle
  * data the rest of the app uses (marketAPI.candles) — this is the visual
  * counterpart to the AI commentary's chart analysis section. Resizable
- * (drag the handle below the chart), and every candle gets a hover tooltip
- * with a rule-based institutional-style read: pattern name (if any) plus
- * exactly what would need to happen next to actually confirm it — never a
- * single candle "confirms" a trend on its own.
+ * (drag the handle below the chart), live-updating (polls on the same
+ * interval as the rest of the app and appends/extends bars in place rather
+ * than rebuilding, so zoom/scroll survive), and every candle gets a hover
+ * tooltip with a rule-based institutional-style read: pattern name (if any)
+ * plus exactly what would need to happen next to actually confirm it — never
+ * a single candle "confirms" a trend on its own.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries, createChart, createSeriesMarkers, CrosshairMode, HistogramSeries, IChartApi, ISeriesApi, LineSeries, SeriesMarker, Time,
 } from "lightweight-charts";
@@ -20,9 +22,19 @@ import { marketAPI } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { analyzeCandles, CandleRow } from "@/lib/candleAnalysis";
+import { aggregateCandles } from "@/lib/aggregateCandles";
 import { EmptyState, ErrorState, SectionHeader, Skeleton } from "./ui";
 
 const RANGES = ["1D", "1M", "3M", "6M", "1Y", "5Y"] as const;
+// Only meaningful for the 1D (intraday) range — real OHLC aggregation of the
+// raw 1-minute candles, not a resample of sparse live-price samples.
+const BUCKETS = [
+  { minutes: 1, label: "1m" },
+  { minutes: 5, label: "5m" },
+  { minutes: 15, label: "15m" },
+  { minutes: 30, label: "30m" },
+  { minutes: 60, label: "1h" },
+];
 const MAS: { period: number; color: string }[] = [
   { period: 20, color: "#f59e0b" },
   { period: 50, color: "#6366f1" },
@@ -48,25 +60,38 @@ function toTime(t: string | number): Time {
   return Math.floor(ms / 1000) as Time;
 }
 
+function barColor(open: number, close: number): string {
+  return close >= open ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)";
+}
+
 export default function CandlestickChart({ symbol }: { symbol: string }) {
   const { settings } = useAppStore();
   const [range, setRange] = useState<(typeof RANGES)[number]>("6M");
+  const [bucketMinutes, setBucketMinutes] = useState(1);
   const [height, setHeight] = useState(320);
   const [fullscreen, setFullscreen] = useState(false);
   const interval = range === "5Y" ? "week" : range === "1D" ? "1minute" : "day";
-  const candles = useApi(() => marketAPI.candles(symbol, range, interval), [symbol, range]);
-  const rows: CandleRow[] = candles.data?.candles || [];
-  // Candle history itself only needs fetching on symbol/range change (full rebuild below);
-  // live movement is layered on top by nudging just the last bar — see the effect further
-  // down — so this poll is cheap (one quote call) and never resets your zoom/scroll.
-  const liveQuote = useApi(() => marketAPI.quote(symbol), [symbol], { refreshMs: settings.refreshSec * 1000 });
+  // Polls on the same cadence as the rest of the app (settings.refreshSec; 0 = off).
+  // The effect below only ever does a full chart rebuild when symbol/range/bucket
+  // actually change — a poll arriving for the same selection takes the cheap
+  // incremental path (series.update() on just the new/changed tail bars).
+  const candles = useApi(() => marketAPI.candles(symbol, range, interval), [symbol, range], { refreshMs: settings.refreshSec * 1000 });
+  const rawRows: CandleRow[] = candles.data?.candles || [];
+  const rows = useMemo(
+    () => (range === "1D" ? aggregateCandles(rawRows, bucketMinutes) : rawRows),
+    // candles.data (not rawRows, a fresh array literal every render) is the stable trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [candles.data, range, bucketMinutes]
+  );
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const lastBarRef = useRef<{ time: Time; open: number; high: number; low: number; close: number } | null>(null);
+  const maSeriesRef = useRef<{ period: number; series: ISeriesApi<"Line"> }[]>([]);
+  const lastBarTimeRef = useRef<number | null>(null);
+  const buildKeyRef = useRef<string>("");
   const tooltipRef = useRef<HTMLDivElement>(null);
   const tooltipTitleRef = useRef<HTMLDivElement>(null);
   const tooltipMetaRef = useRef<HTMLDivElement>(null);
@@ -115,6 +140,36 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
 
   useEffect(() => {
     if (!containerRef.current || rows.length === 0) return;
+    const key = `${symbol}:${range}:${bucketMinutes}`;
+
+    // Same selection, fresh poll data — nudge just the new/changed tail bars
+    // (covers both "same bar extended" and "one or more new bars opened" since
+    // the last update) instead of rebuilding the whole chart and losing zoom.
+    if (buildKeyRef.current === key) {
+      const candleSeries = candleSeriesRef.current;
+      const volumeSeries = volumeSeriesRef.current;
+      if (!candleSeries) return;
+      const lastTime = lastBarTimeRef.current;
+      const tail = lastTime == null ? rows : rows.filter((r) => (toTime(r.time) as number) >= lastTime);
+      const closes = rows.map((r) => r.close);
+      for (const r of tail) {
+        const t = toTime(r.time);
+        candleSeries.update({ time: t, open: r.open, high: r.high, low: r.low, close: r.close });
+        volumeSeries?.update({ time: t, value: r.volume, color: barColor(r.open, r.close) });
+        lastBarTimeRef.current = t as number;
+      }
+      for (const { period, series } of maSeriesRef.current) {
+        const values = sma(closes, period);
+        for (const r of tail) {
+          const idx = rows.indexOf(r);
+          if (values[idx] != null) series.update({ time: toTime(r.time), value: values[idx] as number });
+        }
+      }
+      return;
+    }
+
+    // Selection changed (or first load for it) — full rebuild.
+    buildKeyRef.current = key;
 
     const chart = createChart(containerRef.current, {
       layout: { background: { color: "transparent" }, textColor: "#8a91a8", fontSize: 11 },
@@ -133,7 +188,7 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
     const candleData = rows.map((r) => ({ time: toTime(r.time), open: r.open, high: r.high, low: r.low, close: r.close }));
     candleSeries.setData(candleData);
     candleSeriesRef.current = candleSeries;
-    lastBarRef.current = candleData[candleData.length - 1] || null;
+    lastBarTimeRef.current = (candleData[candleData.length - 1]?.time as number) ?? null;
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
@@ -142,16 +197,11 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
       priceLineVisible: false,
     });
     chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    volumeSeries.setData(
-      rows.map((r) => ({
-        time: toTime(r.time),
-        value: r.volume,
-        color: r.close >= r.open ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)",
-      }))
-    );
+    volumeSeries.setData(rows.map((r) => ({ time: toTime(r.time), value: r.volume, color: barColor(r.open, r.close) })));
     volumeSeriesRef.current = volumeSeries;
 
     const closes = rows.map((r) => r.close);
+    maSeriesRef.current = [];
     for (const { period, color } of MAS) {
       if (rows.length <= period) continue;
       const values = sma(closes, period);
@@ -163,11 +213,13 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
           .map((d, i) => ({ time: d.time, value: values[i] as number }))
           .filter((d) => d.value != null)
       );
+      maSeriesRef.current.push({ period, series: maSeries });
     }
 
     // Rule-based per-candle read (pattern + trend-confirmation checklist) — see
     // lib/candleAnalysis.ts. Patterned candles get a marker; every candle gets
-    // a hover tooltip via the crosshair handler below.
+    // a hover tooltip via the crosshair handler below. Only computed on a full
+    // rebuild — the live-ticking bar picks up its note next time this reruns.
     const notes = analyzeCandles(rows);
     const timeToIndex = new Map<number, number>();
     candleData.forEach((d, i) => timeToIndex.set(d.time as number, i));
@@ -228,41 +280,11 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
-      lastBarRef.current = null;
+      maSeriesRef.current = [];
+      lastBarTimeRef.current = null;
+      buildKeyRef.current = "";
     };
-    // candles.data (not the derived `rows` array literal) is the stable dependency here —
-    // `rows` is recomputed fresh every render and would re-create the chart on every paint.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.data, interval, range]);
-
-  // Live tick: nudges only the last bar (close, and high/low if the live price
-  // extends them) plus today's cumulative volume — no refetch of history, no
-  // chart rebuild, so zoom/scroll and the fullscreen view are undisturbed.
-  useEffect(() => {
-    const q = liveQuote.data;
-    const bar = lastBarRef.current;
-    const candleSeries = candleSeriesRef.current;
-    const volumeSeries = volumeSeriesRef.current;
-    if (!q || q.ltp == null || !bar || !candleSeries) return;
-
-    const updated = {
-      time: bar.time,
-      open: bar.open,
-      high: Math.max(bar.high, q.ltp),
-      low: Math.min(bar.low, q.ltp),
-      close: q.ltp,
-    };
-    candleSeries.update(updated);
-    lastBarRef.current = updated;
-
-    if (volumeSeries && q.volume != null) {
-      volumeSeries.update({
-        time: bar.time,
-        value: q.volume,
-        color: updated.close >= updated.open ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)",
-      });
-    }
-  }, [liveQuote.data]);
+  }, [candles.data, range, bucketMinutes, symbol, rows]);
 
   return (
     <div
@@ -276,6 +298,11 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
         subtitle="Candles, volume, 20/50/200-day MAs & per-candle pattern read — source: Upstox"
         actions={
           <>
+            {range === "1D" && BUCKETS.map((b) => (
+              <button key={b.minutes} className={`chip ${bucketMinutes === b.minutes ? "chip-active" : ""}`} onClick={() => setBucketMinutes(b.minutes)}>
+                {b.label}
+              </button>
+            ))}
             {RANGES.map((r) => (
               <button key={r} className={`chip ${range === r ? "chip-active" : ""}`} onClick={() => setRange(r)}>{r}</button>
             ))}

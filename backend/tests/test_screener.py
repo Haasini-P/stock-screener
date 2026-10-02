@@ -120,9 +120,25 @@ class TestDailyListPipeline:
         status = {c["symbol"]: c["today_status"] for c in report["continuity"]}
         assert status == {"KEEP": "RETAINED", "FRESH": "NEW", "GONE": "REMOVED"}
 
-    def test_existing_holdings_excluded(self):
-        report = self.generate([make_row("AVANTEL", name="Avantel", entry="BUY_NOW")])
-        assert report["actionable"]["buy_now"] == []
+    def test_held_symbol_still_gets_bucketed_not_excluded(self):
+        """
+        Holdings used to be hard-excluded from the daily list entirely. They're
+        no longer special-cased here at all — is_holding/holding_action are
+        attached upstream (from the user's live broker holdings) and just ride
+        along on the row into whichever bucket its entry classification earns,
+        same as any other candidate.
+        """
+        report = self.generate([make_row("AVANTEL", entry="BUY_NOW", is_holding=True, holding_action="ADD")])
+        buy_now = report["actionable"]["buy_now"]
+        assert [s["symbol"] for s in buy_now] == ["AVANTEL"]
+        assert buy_now[0]["is_holding"] is True
+        assert buy_now[0]["holding_action"] == "ADD"
+
+    def test_held_symbol_with_avoid_entry_lands_in_avoid_tagged_reduce(self):
+        report = self.generate([make_row("GARUDA", entry="AVOID", is_holding=True, holding_action="REDUCE")])
+        avoid = report["actionable"]["avoid"]
+        assert [s["symbol"] for s in avoid] == ["GARUDA"]
+        assert avoid[0]["holding_action"] == "REDUCE"
 
 
 class TestFlowsNormalisation:
