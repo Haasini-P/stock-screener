@@ -19,9 +19,8 @@ re-billing the API for an unchanged signal.
 import asyncio
 import base64
 import hashlib
-import json
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import anthropic
 from sqlalchemy import select
@@ -114,6 +113,134 @@ async def _call_model(
     return await asyncio.to_thread(fn, api_key, model, system_prompt, text, image_png, max_tokens)
 
 
+def _round(v: Any, nd: int = 2) -> Any:
+    try:
+        return round(float(v), nd)
+    except (TypeError, ValueError):
+        return v
+
+
+def _compact_quote(quote: Optional[dict]) -> str:
+    """Upstox's raw quote payload also carries market-depth (bid/ask ladder), instrument
+    IDs and OI fields a research report never uses — pull just the levels that matter
+    instead of dumping the whole object as JSON."""
+    row = next(iter((quote or {}).values()), {}) if quote else {}
+    if not row:
+        return ""
+    ohlc = row.get("ohlc") or {}
+    return (
+        f"LTP {_round(row.get('last_price'))} (chg {_round(row.get('net_change'))}), "
+        f"O/H/L {_round(ohlc.get('open'))}/{_round(ohlc.get('high'))}/{_round(ohlc.get('low'))}, "
+        f"volume {row.get('volume')}"
+    )
+
+
+def _compact_indicators(snapshot: Optional[dict]) -> str:
+    """The feature snapshot has ~70 fields at full float precision (e.g. 15+ significant
+    figures) — most already stated elsewhere in this context (RSI/ADX/volume ratio/trend
+    are in the Technicals line). This surfaces only what isn't, rounded to a sane
+    precision, as compact text instead of a raw (and previously truncated mid-structure,
+    i.e. invalid) JSON dump."""
+    if not snapshot:
+        return ""
+    dist_200 = snapshot.get("dist_sma_200")
+    dist_high = snapshot.get("dist_52w_high")
+    parts = [
+        f"Bollinger {_round(snapshot.get('bollinger_lower'))}-{_round(snapshot.get('bollinger_upper'))} (%B {_round(snapshot.get('bollinger_pct_b'))})",
+        f"Stochastic K{_round(snapshot.get('stochastic_k'), 1)}/D{_round(snapshot.get('stochastic_d'), 1)}",
+        f"ATR(14) {_round(snapshot.get('atr_14'))}",
+        f"support/resistance {_round(snapshot.get('support_1'))}/{_round(snapshot.get('resistance_1'))}",
+        f"52w range {_round(snapshot.get('low_52w'))}-{_round(snapshot.get('high_52w'))}"
+        + (f" ({_round(dist_high * 100, 1)}% from high)" if dist_high is not None else ""),
+        f"VWAP {_round(snapshot.get('vwap'))}",
+        f"volume z-score {_round(snapshot.get('volume_zscore'))}",
+    ]
+    if dist_200 is not None:
+        parts.append(f"{_round(dist_200 * 100, 1)}% {'above' if dist_200 >= 0 else 'below'} 200-day MA")
+    return ", ".join(parts)
+
+
+def _macd_text(snapshot: Optional[dict]) -> str:
+    """tech.get('macd') (StockSignal.macd_signal_status) is never populated by the
+    signal engine — always empty — so pull the real value from the feature snapshot
+    instead of silently rendering 'MACD ,' with nothing after it."""
+    if not snapshot:
+        return "n/a"
+    hist = snapshot.get("macd_histogram")
+    macd, sig = snapshot.get("macd"), snapshot.get("macd_signal")
+    if macd is None or sig is None:
+        return "n/a"
+    bias = "bullish" if (hist or 0) > 0 else "bearish" if (hist or 0) < 0 else "flat"
+    return f"{_round(macd, 2)} vs signal {_round(sig, 2)} ({bias})"
+
+
+def _compact_profile(profile: Optional[dict], limit: int = 320) -> str:
+    if not profile:
+        return ""
+    text = (profile.get("company_profile") or "").strip()
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0] + "…"
+    sector = profile.get("sector")
+    return f"{text} (Sector: {sector})" if sector else text
+
+
+def _compact_key_ratios(key_ratios: Optional[list]) -> str:
+    if not key_ratios:
+        return ""
+    parts = []
+    for r in key_ratios:
+        name, cv, sv = r.get("name"), r.get("company_value"), r.get("sector_value")
+        if name is None or cv is None:
+            continue
+        parts.append(f"{name} {cv}" + (f" (sector {sv})" if sv is not None else ""))
+    return ", ".join(parts)
+
+
+def _compact_shareholding(shareholding: Optional[list]) -> str:
+    """Each category carries a multi-quarter history — a research report only needs
+    the latest print, not the trend table, so this keeps history[0] per category."""
+    if not shareholding:
+        return ""
+    parts = []
+    for cat in shareholding:
+        latest = (cat.get("history") or [{}])[0]
+        if latest.get("value") is None:
+            continue
+        parts.append(f"{cat.get('category')} {latest['value']}% ({latest.get('period', '')})")
+    return ", ".join(parts)
+
+
+def _compact_corporate_actions(actions: Optional[list], limit: int = 5) -> str:
+    if not actions:
+        return ""
+    parts = []
+    for a in actions[:limit]:
+        bits = [a.get("name") or "Action"]
+        if a.get("amount") is not None:
+            bits.append(f"amount {a['amount']}")
+        if a.get("ratio"):
+            bits.append(f"ratio {a['ratio']}")
+        if a.get("expiry_date"):
+            bits.append(f"ex-date {a['expiry_date']}")
+        parts.append(" ".join(bits))
+    return "; ".join(parts)
+
+
+def _compact_competitors(competitors: Optional[list], limit: int = 5, name_chars: int = 90) -> str:
+    """Competitor rows carry no name field — only a company_profile paragraph that
+    starts with the name — so truncate hard rather than dumping full paragraphs
+    per peer (confirmed live: 8 peers x full profiles was most of the fundamentals cost)."""
+    if not competitors:
+        return ""
+    parts = []
+    for c in competitors[:limit]:
+        text = (c.get("company_profile") or "").strip()
+        if len(text) > name_chars:
+            text = text[:name_chars].rsplit(" ", 1)[0] + "…"
+        parts.append(text)
+    return "; ".join(parts)
+
+
 def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optional[dict]) -> str:
     """A structured brief from data this app already computes — analysis from
     /api/signals/analyze/{symbol}, fundamentals from /api/stocks/{symbol}/fundamentals,
@@ -130,30 +257,35 @@ def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optiona
 
     fundamental_signal = s.get("fundamental") or {}
 
+    # Every horizon's prediction carries the same snapshot, so any one horizon will do.
+    snapshot = next((p.get("feature_snapshot") for p in predictions.values() if p.get("feature_snapshot")), None)
+
     lines = [
         f"Symbol: {analysis.get('symbol')} ({analysis.get('name', '')})",
         f"Regime: {analysis.get('metadata', {}).get('regime', 'unknown')}",
         f"Signal: {(s.get('signal') or {}).get('entry', 'unknown')} / {(s.get('signal') or {}).get('type', '')}",
-        f"Technicals: RSI {tech.get('rsi')}, ADX {tech.get('adx')}, MACD {tech.get('macd')}, "
+        f"Technicals: RSI {tech.get('rsi')}, ADX {tech.get('adx')}, MACD {_macd_text(snapshot)}, "
         f"volume ratio {tech.get('volume_ratio')}, trend {tech.get('trend')}",
         f"Entry zone: {ee.get('entry_zone')} | Stop-loss: {ee.get('stop_loss')} | "
         f"Target 1/2: {ee.get('target_1')}/{ee.get('target_2')} | R:R {ee.get('risk_reward')}",
         f"Suggested position: {pos.get('quantity')} shares, value {pos.get('value')}, risk {pos.get('max_risk')}",
     ]
-    if fundamental_signal:
-        lines.append(
-            f"Quick fundamentals (rule engine): P/E {fundamental_signal.get('pe')}, ROE {fundamental_signal.get('roe')}, "
-            f"revenue growth {fundamental_signal.get('revenue_growth')} — {fundamental_signal.get('summary', '')}"
-        )
-    if q:
-        lines.append(f"Quote data: {json.dumps(q)[:1500]}")
+    # pe/roe/revenue_growth are never populated on this code path (generate_signal()
+    # is called without a fundamentals arg) — only emit this line when there's a
+    # real summary, instead of three "None"s that waste tokens and look like data.
+    if fundamental_signal.get("summary"):
+        pe, roe, rev = fundamental_signal.get("pe"), fundamental_signal.get("roe"), fundamental_signal.get("revenue_growth")
+        stats = ", ".join(f"{k} {v}" for k, v in (("P/E", pe), ("ROE", roe), ("rev growth", rev)) if v is not None)
+        lines.append(f"Quick fundamentals (rule engine): {stats + ' — ' if stats else ''}{fundamental_signal['summary']}")
+    quote_text = _compact_quote(q)
+    if quote_text:
+        lines.append(f"Quote data: {quote_text}")
 
-    # Full computed indicator set (MACD value/signal, Bollinger, Stochastic, ATR,
-    # support/resistance, 52-week range, VWAP, volume z-score, etc.) — every
-    # horizon's prediction carries the same snapshot, so any one horizon will do.
-    snapshot = next((p.get("feature_snapshot") for p in predictions.values() if p.get("feature_snapshot")), None)
-    if snapshot:
-        lines.append(f"Full technical indicator snapshot: {json.dumps(snapshot)[:3000]}")
+    # Other computed indicators not already covered above (Bollinger, Stochastic,
+    # ATR, support/resistance, 52-week range, VWAP, volume z-score, 200-day MA).
+    indicators_text = _compact_indicators(snapshot)
+    if indicators_text:
+        lines.append(f"Other indicators: {indicators_text}")
 
     if evidence.get("positive"):
         lines.append("Supporting evidence: " + "; ".join(e.get("factor", "") for e in evidence["positive"][:5]))
@@ -182,16 +314,21 @@ def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optiona
 
     if fundamentals:
         lines.append("\n--- Fundamentals (from Upstox) ---")
-        if fundamentals.get("profile"):
-            lines.append(f"Profile: {json.dumps(fundamentals['profile'])[:1000]}")
-        if fundamentals.get("key_ratios"):
-            lines.append(f"Key ratios: {json.dumps(fundamentals['key_ratios'])[:1500]}")
-        if fundamentals.get("shareholding"):
-            lines.append(f"Shareholding: {json.dumps(fundamentals['shareholding'])[:1000]}")
-        if fundamentals.get("corporate_actions"):
-            lines.append(f"Corporate actions: {json.dumps(fundamentals['corporate_actions'])[:800]}")
-        if fundamentals.get("competitors"):
-            lines.append(f"Peers/competitors: {json.dumps(fundamentals['competitors'])[:1200]}")
+        profile_text = _compact_profile(fundamentals.get("profile"))
+        if profile_text:
+            lines.append(f"Profile: {profile_text}")
+        ratios_text = _compact_key_ratios(fundamentals.get("key_ratios"))
+        if ratios_text:
+            lines.append(f"Key ratios: {ratios_text}")
+        shareholding_text = _compact_shareholding(fundamentals.get("shareholding"))
+        if shareholding_text:
+            lines.append(f"Shareholding (latest): {shareholding_text}")
+        actions_text = _compact_corporate_actions(fundamentals.get("corporate_actions"))
+        if actions_text:
+            lines.append(f"Corporate actions: {actions_text}")
+        competitors_text = _compact_competitors(fundamentals.get("competitors"))
+        if competitors_text:
+            lines.append(f"Peers/competitors: {competitors_text}")
         if fundamentals.get("unavailable"):
             lines.append(f"Not available from Upstox for this stock: {', '.join(fundamentals['unavailable'])}")
 
@@ -220,7 +357,12 @@ def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optiona
     lines.append(
         "\nProduce the full report structure defined in your system prompt for this stock. Where a section's "
         "data wasn't provided above, say so explicitly (per your FACT/ESTIMATE/OPINION rules) rather than "
-        "inventing numbers — do not skip a section silently, just mark it not verifiable from available data."
+        "inventing numbers — do not skip a section silently, just mark it not verifiable from available data. "
+        "Be concise: the app already shows the numeric tables above (predictions, entry/stop/targets, indicators) "
+        "to the reader next to your commentary, so don't restate them in full — reference them briefly and spend "
+        "your words on interpretation. Explicitly call out, in a short line each, whether this stock looks "
+        "favorable for SHORT-TERM (days, ~5D horizon), MEDIUM-TERM (weeks, ~20D horizon) and LONG-TERM "
+        "(structural, 200-day trend) holding — the app renders these as a table, so state each verdict plainly."
     )
     return "\n".join(lines)
 

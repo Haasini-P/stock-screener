@@ -51,7 +51,11 @@ The daily stock list grouped by horizon (short / mid / long) or by action (Buy n
 Search a stock to see up / flat / down probabilities, expected return and a range for 1D, 3D, 5D, 10D and 20D. The **Model** column shows **Trained model** (your promoted LightGBM champion) or **Baseline only** (rule-based fallback — click it to go train one). Probabilities are estimates, not promises.
 
 ### Stock Report
-A full research document for one stock: verdict, **Chart Analysis**, thesis with AI commentary, trade plan, multi-horizon outlook, fundamentals and news. **Export** downloads it as Markdown.
+A full research document for one stock: verdict, **Term Outlook**, **Chart Analysis**, thesis with AI commentary, trade plan, multi-horizon outlook, fundamentals and news. **Export** downloads it as Markdown.
+
+**Term Outlook** answers "does this work for short / medium / long-term holding?" in one table — Favorable / Neutral / Unfavorable per term, each with its own reasoning:
+- **Short-term** (~5 trading days) and **Medium-term** (~20 trading days) come from the model's own direction-probability predictions for those horizons.
+- **Long-term** has no multi-month ML prediction, so it's a structural read (price vs. the 200-day moving average) rather than a model forecast — labeled as such, not conflated with the other two.
 
 **Chart Analysis** (also on each stock's live page):
 - Real candlesticks with volume and 20/50/200-day moving averages, from Upstox data.

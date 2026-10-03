@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { BellPlus, ChevronRight, Download, FileText, Newspaper, Shield, Target, TrendingDown, TrendingUp } from "lucide-react";
+import { BellPlus, ChevronRight, Clock, Download, FileText, Newspaper, Shield, Target, TrendingDown, TrendingUp } from "lucide-react";
 import { marketAPI, signalsAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
@@ -34,6 +34,76 @@ function saveRecent(symbol: string, prev: string[]): string[] {
   return next;
 }
 
+type TermVerdict = {
+  term: string;
+  horizon: string;
+  verdict: "Favorable" | "Neutral" | "Unfavorable" | "No data";
+  badgeClass: string;
+  reason: string;
+};
+
+/** Directional read for a single prediction horizon — rule-based (no extra AI call),
+ * derived from the same up/down probabilities and expected return already shown in
+ * the Multi-Horizon Model Outlook table below. */
+function classifyDirectional(dp: any, expectedReturn: number | null | undefined): { verdict: TermVerdict["verdict"]; badgeClass: string } {
+  if (!dp) return { verdict: "No data", badgeClass: "badge-neutral" };
+  const edge = (dp.up ?? 0) - (dp.down ?? 0);
+  if (edge > 0.12 && (expectedReturn ?? 0) > 0) return { verdict: "Favorable", badgeClass: "badge-bullish" };
+  if (edge < -0.12 && (expectedReturn ?? 0) < 0) return { verdict: "Unfavorable", badgeClass: "badge-bearish" };
+  return { verdict: "Neutral", badgeClass: "badge-neutral" };
+}
+
+/** Short/medium-term come from real ML horizon predictions (5D / 20D — the longest
+ * horizon this app's model trains on). Long-term has no 6-24 month ML prediction, so
+ * it's reported as a structural read (price vs. 200-day MA) and labeled as such rather
+ * than presented as a model forecast it isn't. */
+function buildTermOutlook(a: any): TermVerdict[] {
+  const predictions = a?.predictions || {};
+  const rows: TermVerdict[] = [];
+
+  const p5 = predictions["5D"];
+  const dp5 = p5?.direction_probabilities;
+  const short = classifyDirectional(dp5, p5?.expected_return);
+  rows.push({
+    term: "Short-term",
+    horizon: "~5 trading days",
+    verdict: short.verdict,
+    badgeClass: short.badgeClass,
+    reason: dp5
+      ? `Model: ${(dp5.up * 100).toFixed(0)}% up / ${(dp5.down * 100).toFixed(0)}% down, expected ${p5.expected_return != null ? fmtPct(p5.expected_return * 100) : "—"} (${p5.confidence} confidence)`
+      : "No 5D model prediction available",
+  });
+
+  const p20 = predictions["20D"];
+  const dp20 = p20?.direction_probabilities;
+  const medium = classifyDirectional(dp20, p20?.expected_return);
+  rows.push({
+    term: "Medium-term",
+    horizon: "~20 trading days (≈1 month)",
+    verdict: medium.verdict,
+    badgeClass: medium.badgeClass,
+    reason: dp20
+      ? `Model: ${(dp20.up * 100).toFixed(0)}% up / ${(dp20.down * 100).toFixed(0)}% down, expected ${p20.expected_return != null ? fmtPct(p20.expected_return * 100) : "—"} (${p20.confidence} confidence)`
+      : "No 20D model prediction available",
+  });
+
+  const snapshot = p20?.feature_snapshot || (Object.values(predictions).find((p: any) => p?.feature_snapshot) as any)?.feature_snapshot;
+  const dist200 = snapshot?.dist_sma_200;
+  let longVerdict: TermVerdict["verdict"] = "No data";
+  let longBadge = "badge-neutral";
+  let longReason = "200-day moving average data not available";
+  if (dist200 != null) {
+    const pct = dist200 * 100;
+    if (pct > 3) { longVerdict = "Favorable"; longBadge = "badge-bullish"; }
+    else if (pct < -3) { longVerdict = "Unfavorable"; longBadge = "badge-bearish"; }
+    else { longVerdict = "Neutral"; longBadge = "badge-neutral"; }
+    longReason = `Price is ${Math.abs(pct).toFixed(1)}% ${pct >= 0 ? "above" : "below"} its 200-day moving average — structural trend read, not a model forecast`;
+  }
+  rows.push({ term: "Long-term", horizon: "Structural (200-day trend)", verdict: longVerdict, badgeClass: longBadge, reason: longReason });
+
+  return rows;
+}
+
 /** Plain-text/markdown render of the report, for the download button. */
 function toMarkdown(symbol: string, q: any, analysis: any, fundamentals: any, news: any[]): string {
   const s = analysis?.signal;
@@ -48,6 +118,12 @@ function toMarkdown(symbol: string, q: any, analysis: any, fundamentals: any, ne
     lines.push(`- Day range: ₹${fmtNum(q.ohlc?.low)} – ₹${fmtNum(q.ohlc?.high)}`);
     lines.push(`- Volume: ${fmtVolume(q.volume)}`);
     lines.push(`- ISIN: ${q.isin || "—"}\n`);
+  }
+
+  if (analysis?.predictions) {
+    lines.push(`## Term Outlook`);
+    buildTermOutlook(analysis).forEach((row) => lines.push(`- **${row.term}** (${row.horizon}): ${row.verdict} — ${row.reason}`));
+    lines.push("");
   }
 
   if (analysis?.technical_summary) {
@@ -275,6 +351,28 @@ export default function ReportView() {
             <p className="text-xs" style={{ color: "var(--color-bearish)" }}>
               No signal data returned for {symbol} — Buy/Sell isn&apos;t available until the analysis loads successfully. Try reloading this report.
             </p>
+          )}
+
+          {/* Term outlook — short/medium/long-term read at a glance */}
+          {a.predictions && (
+            <div>
+              <SectionHeader icon={<Clock size={16} />} title="Term Outlook" subtitle="Does this work for short, medium or long-term holding?" />
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr><th>Term</th><th>Horizon</th><th>Verdict</th><th>Why</th></tr></thead>
+                  <tbody>
+                    {buildTermOutlook(a).map((row) => (
+                      <tr key={row.term}>
+                        <td className="font-semibold">{row.term}</td>
+                        <td className="text-xs" style={{ color: "var(--text-muted)" }}>{row.horizon}</td>
+                        <td><span className={`badge ${row.badgeClass}`}>{row.verdict}</span></td>
+                        <td className="text-xs" style={{ color: "var(--text-secondary)" }}>{row.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
 
           {/* Chart analysis */}
