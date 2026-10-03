@@ -29,6 +29,20 @@ async def lifespan(app: FastAPI):
         environment=settings.app_env,
     )
 
+    # Hardcoded fallbacks in app/config.py are publicly known: with them, anyone can forge
+    # login tokens and decrypt stored broker/AI API keys. Refuse to serve production traffic
+    # on them; warn loudly in development so it doesn't silently carry over.
+    insecure = [
+        name for name, value, default in (
+            ("JWT_SECRET", settings.jwt_secret, "change-this-to-a-random-64-char-string"),
+            ("ENCRYPTION_KEY", settings.encryption_key, "change-this-to-a-fernet-key"),
+        ) if value == default
+    ]
+    if insecure:
+        if settings.is_production:
+            raise RuntimeError(f"Refusing to start in production with default {', '.join(insecure)} — set real values.")
+        logger.warning("insecure_default_secrets", settings=insecure)
+
     # Initialize database tables (dev only)
     if settings.is_development:
         try:
@@ -85,13 +99,34 @@ from app.services.upstox.client import UpstoxAPIError, UpstoxDataUnavailableErro
 
 @app.exception_handler(UpstoxAPIError)
 async def upstox_api_error_handler(request: Request, exc: UpstoxAPIError):
-    # Never forward Upstox 401/403 as-is: the frontend treats 401 as "app session expired"
+    # Never forward Upstox 401/403 as-is: the frontend treats 401 as "app session expired".
+    # Relay Upstox's own error instead of asserting "expired" — a 401/403 is also returned
+    # for a malformed token, one that lacks scope for this specific endpoint, or one that
+    # was revoked by generating a newer one elsewhere, none of which is "expired".
     if exc.status_code in (401, 403):
         status_code = 502
-        detail = (
-            "Upstox rejected the access token (expired or invalid). "
-            "Generate a new analytics token or reconnect your Upstox account."
-        )
+        reason = exc.message or "no reason given"
+        if exc.error_code:
+            reason += f" (code {exc.error_code})"
+        token_source = getattr(exc, "token_source", "")
+        if token_source == "personal":
+            detail = (
+                f"Your personal Upstox connection was rejected: {reason}. Upstox's own OAuth "
+                "tokens are short-lived by design (typically invalidated daily, separate from "
+                "any analytics token) — reconnect your Upstox account in Settings → Portfolio."
+            )
+        elif token_source == "analytics":
+            detail = (
+                f"The shared analytics token (UPSTOX_ANALYTICS_TOKEN) was rejected: {reason}. "
+                "A far-off listed expiry doesn't guarantee it's still valid — Upstox can "
+                "invalidate it early, e.g. if a newer one was generated elsewhere. Generate a "
+                "fresh one in Settings → Broker API Credentials and confirm it's the one in use."
+            )
+        else:
+            detail = (
+                f"Upstox rejected the request: {reason}. Generate a new analytics token or "
+                "reconnect your Upstox account in Settings."
+            )
     elif exc.status_code == 429:
         status_code, detail = 429, "Upstox rate limit reached. Please retry in a few seconds."
     elif exc.status_code >= 500:

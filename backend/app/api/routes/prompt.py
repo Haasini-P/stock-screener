@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_optional_user
+from app.api.dependencies import get_current_user, get_optional_user
 from app.api.routes.market import get_market_provider
 from app.database import get_db
 from app.models.user import User
@@ -37,13 +37,15 @@ async def get_prompt(db: AsyncSession = Depends(get_db)):
 @router.put("")
 async def update_prompt(
     body: PromptUpdate,
-    user: Optional[User] = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Login required: this text is sent as the system prompt on every AI commentary call,
+    # so an unauthenticated write would let anyone steer every analysis the app produces.
     row = await get_current_prompt(db)
     row.content = body.content
     row.source = "manual"
-    row.updated_by = user.email if user else "guest"
+    row.updated_by = user.email
     await db.flush()
     await db.refresh(row)
     return {

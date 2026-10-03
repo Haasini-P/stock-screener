@@ -45,6 +45,7 @@ kiteconnect==5.2.2
 
 # --- AI Commentary ---
 anthropic==1.11.0
+google-genai==2.28.0
 matplotlib==3.11.2
 mplfinance==0.12.10b0
 

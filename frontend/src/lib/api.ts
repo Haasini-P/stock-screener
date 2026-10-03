@@ -5,6 +5,15 @@
 
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from "axios";
 
+declare module "axios" {
+  export interface AxiosRequestConfig {
+    /** Opt this one request out of the global 401 → "/login?expired=1" redirect below —
+     * used by authAPI.me() when store.ts's verifySession() checks a possibly-stale token
+     * right after hydration; a dead token there isn't an "active session expired" event. */
+    skipAuthRedirect?: boolean;
+  }
+}
+
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const api: AxiosInstance = axios.create({
@@ -33,7 +42,7 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
-    if (error.response?.status === 401 && typeof window !== "undefined") {
+    if (error.response?.status === 401 && typeof window !== "undefined" && !error.config?.skipAuthRedirect) {
       const hadSession = !!localStorage.getItem("stockmind_token");
       localStorage.removeItem("stockmind_token");
       localStorage.removeItem("stockmind_user");
@@ -78,7 +87,7 @@ export const authAPI = {
   login: (email: string, password: string) =>
     api.post("/api/auth/login", { email, password }),
 
-  me: () => api.get("/api/auth/me"),
+  me: () => api.get("/api/auth/me", { skipAuthRedirect: true }),
 
   upstoxConnect: () => api.get("/api/auth/upstox/connect"),
   upstoxDisconnect: () => api.post("/api/auth/upstox/disconnect"),
@@ -278,10 +287,13 @@ export interface ModelPricing {
   output: number;
 }
 
+export type AIProvider = "anthropic" | "google";
+
 export interface AISettingsStatus {
-  has_key: boolean;
   model: string;
+  provider: AIProvider;
   configured: boolean;
+  providers: Record<AIProvider, { has_key: boolean }>;
   pricing: Record<string, ModelPricing>;
 }
 
@@ -303,7 +315,9 @@ export interface AIBatchCommentaryResult {
 
 export const aiSettingsAPI = {
   get: () => api.get<AISettingsStatus>("/api/settings/ai"),
-  update: (payload: { api_key?: string; model: string }) => api.put("/api/settings/ai", payload),
+  setModel: (model: string) => api.put<AISettingsStatus>("/api/settings/ai", { model }),
+  setProviderKey: (provider: AIProvider, api_key: string) =>
+    api.put<AISettingsStatus>(`/api/settings/ai/${provider}`, { api_key }),
 };
 
 export const MAX_BATCH_SYMBOLS = 8;

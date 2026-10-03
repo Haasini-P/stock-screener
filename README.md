@@ -5,6 +5,8 @@
 **⚠️ This is an analytical decision-support system, NOT an autonomous trading system.**  
 Predictions are probabilistic estimates, not certainties. No trades are executed automatically.
 
+**Using the app:** see [USAGE.md](USAGE.md) for a page-by-page guide — setup, the scanner, predictions, stock reports, portfolio recommendations, alerts, AI commentary (Claude/Gemini), model training, and troubleshooting.
+
 ---
 
 ## Quick Start (Development)

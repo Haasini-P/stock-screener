@@ -384,13 +384,20 @@ const ALERT_POLL_MS = 60_000;
 const STATUS_POLL_MS = 120_000;
 
 export default function AppShell({ children }: { children: ReactNode }) {
-  const { sidebarOpen, isAuthenticated, settings, initFromStorage, setNotifications, toast } = useAppStore();
+  const { sidebarOpen, isAuthenticated, settings, initFromStorage, verifySession, setNotifications, toast } = useAppStore();
   const [upstox, setUpstox] = useState<UpstoxState>("checking");
   const [marketOpen, setMarketOpen] = useState<boolean | null>(null);
   const riskRef = useRef<AppNotification[]>([]);
   const alertRef = useRef<AppNotification[]>([]);
 
-  useEffect(() => initFromStorage(), [initFromStorage]);
+  useEffect(() => {
+    // initFromStorage trusts the stored token optimistically (no flash of guest UI on
+    // load); verifySession immediately checks it's still actually valid and quietly
+    // resets to guest if not — see store.ts for why this is split from the generic
+    // 401 handler, which is reserved for a session dying mid-use, not a stale one.
+    initFromStorage();
+    verifySession();
+  }, [initFromStorage, verifySession]);
 
   const publish = useCallback(
     () => setNotifications([...alertRef.current, ...riskRef.current]),

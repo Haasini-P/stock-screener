@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { AlertTriangle, Check, RotateCcw, Save, Sparkles } from "lucide-react";
 import { errorMessage, promptAPI } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -29,7 +30,7 @@ interface PromptSuggestion {
 }
 
 export default function PromptView() {
-  const { toast } = useAppStore();
+  const { toast, isAuthenticated } = useAppStore();
   const current = useApi<PromptRecord>(() => promptAPI.get(), []);
   const [draft, setDraft] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -175,15 +176,21 @@ export default function PromptView() {
                 <button className="btn-ghost text-xs" onClick={revert} disabled={!dirty || saving}>
                   <RotateCcw size={13} /> Revert
                 </button>
-                <button
-                  className="btn-primary text-xs"
-                  style={{ padding: "6px 14px" }}
-                  onClick={() => save(value)}
-                  disabled={!dirty || saving || !value.trim()}
-                >
-                  {saving ? <Check size={13} className="animate-pulse" /> : <Save size={13} />}
-                  {saving ? "Saving…" : "Save prompt"}
-                </button>
+                {isAuthenticated ? (
+                  <button
+                    className="btn-primary text-xs"
+                    style={{ padding: "6px 14px" }}
+                    onClick={() => save(value)}
+                    disabled={!dirty || saving || !value.trim()}
+                  >
+                    {saving ? <Check size={13} className="animate-pulse" /> : <Save size={13} />}
+                    {saving ? "Saving…" : "Save prompt"}
+                  </button>
+                ) : (
+                  <Link href="/login?next=%2F%23prompt" className="btn-primary text-xs" style={{ padding: "6px 14px" }}>
+                    Sign in to save
+                  </Link>
+                )}
               </div>
             </div>
           </>

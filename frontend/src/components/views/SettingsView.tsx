@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Bell, Brain, Copy, Database, KeyRound, Landmark, LogOut, Plus, RotateCw, Save, Server, ShieldCheck, SlidersHorizontal, Sparkles, Star, Trash2, User } from "lucide-react";
 import {
-  accountsAPI, aiSettingsAPI, AISettingsStatus, API_BASE_URL, BrokerAccount, BrokerCredentialStatus, brokerSettingsAPI,
+  accountsAPI, aiSettingsAPI, AIProvider, AISettingsStatus, API_BASE_URL, BrokerAccount, BrokerCredentialStatus, brokerSettingsAPI,
   DevService, errorMessage, healthAPI, mlAPI, ModelVersionSummary, systemAPI,
 } from "@/lib/api";
 import { DEFAULT_SETTINGS, useAppStore } from "@/lib/store";
@@ -128,8 +128,8 @@ export default function SettingsView() {
         <Card className="lg:col-span-2">
           <SectionHeader
             icon={<Sparkles size={16} />}
-            title="AI Commentary (Claude API)"
-            subtitle="Powers the on-demand “AI take” button on Scanner, Daily Signals and Stock Report using the prompt from the AI Prompt tab. Only called when you click it — never automatic."
+            title="AI Commentary (Claude / Gemini)"
+            subtitle="Powers the on-demand “AI take” and “Batch AI take” buttons on Scanner, Daily Signals and Stock Report using the prompt from the AI Prompt tab. Save a key for either provider (or both), then pick the active model. Only called when you click it — never automatic."
           />
           <AICommentarySettingsPanel isAuthenticated={isAuthenticated} />
         </Card>
@@ -387,6 +387,16 @@ function BrokerCredentialForm({
   );
 }
 
+const AI_PROVIDER_LABEL: Record<AIProvider, string> = { anthropic: "Anthropic (Claude)", google: "Google (Gemini)" };
+// Groups the model dropdown by provider from the model id's own naming convention
+// (claude-* / gemini-*) — the backend's pricing map isn't keyed by provider itself.
+const MODEL_PROVIDER_PREFIX: Record<AIProvider, RegExp> = { anthropic: /^claude-/, google: /^gemini-/ };
+const AI_PROVIDER_KEY_PLACEHOLDER: Record<AIProvider, string> = { anthropic: "sk-ant-...", google: "AIza..." };
+const AI_PROVIDER_KEY_HELP: Record<AIProvider, string> = {
+  anthropic: "console.anthropic.com → API Keys",
+  google: "aistudio.google.com/apikey — has a free tier (rate-limited), no billing required to start",
+};
+
 function AICommentarySettingsPanel({ isAuthenticated }: { isAuthenticated: boolean }) {
   const { toast } = useAppStore();
   const status = useApi(() => aiSettingsAPI.get(), [], { enabled: isAuthenticated });
@@ -397,21 +407,86 @@ function AICommentarySettingsPanel({ isAuthenticated }: { isAuthenticated: boole
   if (status.loading) return <LoadingRows rows={3} />;
   if (status.error) return <ErrorState message={status.error} onRetry={status.reload} />;
 
+  const current = status.data!;
+  const reload = () => status.reload();
+
   return (
-    <AICommentaryForm
-      key={`${status.data!.model}:${status.data!.has_key}`}
-      current={status.data!}
-      onSaved={() => {
-        status.reload();
-        toast("AI commentary settings saved", "success");
-      }}
-    />
+    <div className="space-y-3 max-w-md">
+      {(Object.keys(AI_PROVIDER_LABEL) as AIProvider[]).map((provider) => (
+        <AIProviderKeyForm
+          key={`${provider}:${current.providers[provider].has_key}`}
+          provider={provider}
+          hasKey={current.providers[provider].has_key}
+          onSaved={() => {
+            reload();
+            toast(`${AI_PROVIDER_LABEL[provider]} key saved`, "success");
+          }}
+        />
+      ))}
+      <AIModelPicker
+        key={current.model}
+        current={current}
+        onSaved={() => {
+          reload();
+          toast("Active model updated", "success");
+        }}
+      />
+    </div>
   );
 }
 
-function AICommentaryForm({ current, onSaved }: { current: AISettingsStatus; onSaved: () => void }) {
+function AIProviderKeyForm({
+  provider, hasKey, onSaved,
+}: {
+  provider: AIProvider;
+  hasKey: boolean;
+  onSaved: () => void;
+}) {
   const { toast } = useAppStore();
   const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!apiKey) return toast("Enter a key first (or leave the form alone to keep the existing one).", "info");
+    setSaving(true);
+    try {
+      await aiSettingsAPI.setProviderKey(provider, apiKey);
+      setApiKey("");
+      onSaved();
+    } catch (err) {
+      toast(errorMessage(err, `Could not save the ${AI_PROVIDER_LABEL[provider]} key.`), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-2 p-3 rounded-lg" style={{ border: "1px solid var(--border-subtle)" }}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{AI_PROVIDER_LABEL[provider]}</span>
+        <span className={`badge ${hasKey ? "badge-bullish" : "badge-neutral"}`}>{hasKey ? "Configured" : "Not configured"}</span>
+      </div>
+      <div className="flex gap-1.5">
+        <input
+          className="input text-xs"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={hasKey ? "•••••••• (unchanged)" : AI_PROVIDER_KEY_PLACEHOLDER[provider]}
+          autoComplete="new-password"
+        />
+        <button type="submit" className="btn-secondary text-xs shrink-0" disabled={saving}>
+          <Save size={13} /> {saving ? "…" : "Save"}
+        </button>
+      </div>
+      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{AI_PROVIDER_KEY_HELP[provider]}</p>
+    </form>
+  );
+}
+
+function AIModelPicker({ current, onSaved }: { current: AISettingsStatus; onSaved: () => void }) {
+  const { toast } = useAppStore();
   const [model, setModel] = useState(current.model);
   const [saving, setSaving] = useState(false);
 
@@ -419,51 +494,43 @@ function AICommentaryForm({ current, onSaved }: { current: AISettingsStatus; onS
     e.preventDefault();
     setSaving(true);
     try {
-      await aiSettingsAPI.update({ api_key: apiKey || undefined, model });
-      setApiKey("");
+      await aiSettingsAPI.setModel(model);
       onSaved();
     } catch (err) {
-      toast(errorMessage(err, "Could not save AI commentary settings."), "error");
+      toast(errorMessage(err, "Could not switch the active model."), "error");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <form onSubmit={submit} className="space-y-3 max-w-md">
+    <form onSubmit={submit} className="space-y-2 p-3 rounded-lg" style={{ border: "1px solid var(--border-subtle)" }}>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Claude API</span>
+        <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Active model</span>
         <span className={`badge ${current.configured ? "badge-bullish" : "badge-neutral"}`}>
-          {current.configured ? "Configured" : "Not configured"}
+          {current.configured ? "Ready" : `${AI_PROVIDER_LABEL[current.provider]} key needed`}
         </span>
       </div>
-      <div>
-        <label className="field-label">API Key</label>
-        <input
-          className="input text-xs"
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={current.has_key ? "•••••••• (unchanged)" : "sk-ant-..."}
-          autoComplete="new-password"
-        />
-      </div>
-      <div>
-        <label className="field-label">Model</label>
-        <select className="input text-xs" value={model} onChange={(e) => setModel(e.target.value)}>
-          {Object.entries(current.pricing).map(([id, price]) => (
-            <option key={id} value={id}>
-              {id} — ${price.input.toFixed(2)} in / ${price.output.toFixed(2)} out per 1M tokens
-            </option>
-          ))}
-        </select>
-        <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
-          Each click of &ldquo;AI take&rdquo; on an uncached stock costs roughly one request at this
-          model&rsquo;s rate — results are cached per stock per day, so revisiting doesn&rsquo;t re-bill.
-        </p>
-      </div>
+      <select className="input text-xs" value={model} onChange={(e) => setModel(e.target.value)}>
+        {(Object.keys(AI_PROVIDER_LABEL) as AIProvider[]).map((provider) => (
+          <optgroup key={provider} label={AI_PROVIDER_LABEL[provider]}>
+            {Object.entries(current.pricing)
+              .filter(([id]) => MODEL_PROVIDER_PREFIX[provider].test(id))
+              .map(([id, price]) => (
+                <option key={id} value={id}>
+                  {id} — ${price.input.toFixed(2)} in / ${price.output.toFixed(2)} out per 1M tokens
+                </option>
+              ))}
+          </optgroup>
+        ))}
+      </select>
+      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+        Each click of &ldquo;AI take&rdquo; on an uncached stock costs roughly one request at this
+        model&rsquo;s rate — results are cached per stock per day, so revisiting doesn&rsquo;t re-bill.
+        Gemini models also have a separate free tier (rate-limited) via Google AI Studio.
+      </p>
       <button type="submit" className="btn-primary text-xs" disabled={saving}>
-        <Save size={13} /> {saving ? "Saving…" : "Save"}
+        <Save size={13} /> {saving ? "Saving…" : "Use this model"}
       </button>
     </form>
   );

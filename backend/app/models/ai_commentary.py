@@ -1,9 +1,13 @@
 """
 StockMind AI — AI Commentary Models
-AISettings holds the Claude API credentials (singleton, mirrors BrokerCredential's
-encrypt-on-write pattern). AICommentary caches generated commentary per symbol so
-repeated views within the same day — across Scanner, Daily Signals and Stock Report —
-never re-bill the API; see app/services/ai/commentary_service.py.
+AIProviderCredential holds one encrypted API key per provider (Anthropic,
+Google) — mirrors BrokerCredential's per-provider encrypt-on-write pattern,
+so multiple providers' keys can be stored at once and switched between via
+AISettings.model, instead of one key being overwritten every time the active
+model changes provider. AICommentary caches generated commentary per symbol
+so repeated views within the same day — across Scanner, Daily Signals and
+Stock Report — never re-bill whichever API produced it; see
+app/services/ai/commentary_service.py.
 """
 
 import uuid
@@ -15,13 +19,25 @@ from app.database import Base
 from app.models.compat import CompatUUID as UUID
 
 
+class AIProviderCredential(Base):
+    """One encrypted API key per AI provider ("anthropic" | "google")."""
+
+    __tablename__ = "ai_provider_credentials"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider = Column(String(20), nullable=False, unique=True, index=True)
+    api_key_encrypted = Column(Text, nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class AISettings(Base):
-    """Singleton row holding the Claude API key and chosen model."""
+    """Singleton row holding only the currently-active model (which provider's
+    key gets used is resolved from the model name — see ai_config.MODEL_PROVIDER)."""
 
     __tablename__ = "ai_settings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    api_key_encrypted = Column(Text, nullable=True)
     model = Column(String(100), nullable=False, default="claude-opus-5-5")
     updated_by = Column(String(255), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

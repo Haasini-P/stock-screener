@@ -1,14 +1,19 @@
 """
-StockMind AI — Claude-Powered Stock Commentary
+StockMind AI — AI-Powered Stock Commentary (Claude or Gemini)
 Generates on-demand AI commentary for a stock using the stored system prompt
 (app/services/analytics/prompt_service.py) and the same analysis data already
 shown on the Stock Report. This is the first thing that actually reads the
 system prompt — previously it was edited but never used anywhere.
 
+Supports multiple providers — Anthropic (Claude) and Google (Gemini) — each
+with its own stored API key (app/services/ai/ai_config.py); which one is used
+is resolved from the currently active model. _call_model dispatches to
+whichever provider that model belongs to.
+
 Always on-demand, never automatic: commentary can be requested from the
 Scanner, Daily Signals, and Stock Report, all of which can list many stocks
 at once, so every call is cached per (symbol, context_hash, day) to avoid
-re-billing the Claude API for an unchanged signal.
+re-billing the API for an unchanged signal.
 """
 
 import asyncio
@@ -35,6 +40,11 @@ MODEL_PRICING = {
     "claude-opus-5-5": {"input": 4.00, "output": 20.00},
     "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+    # Current as of Oct 2026 per ai.google.dev/gemini-api/docs/pricing — a promotional
+    # rate through Dec 31 2026, rising to $1.50/$7.50 after. Also has a separate,
+    # rate-limited FREE tier via a Google AI Studio key (ai.google.dev), which is the
+    # usual reason to pick it over a paid-only Claude model.
+    "gemini-3.8-flash": {"input": 0.75, "output": 3.75},
 }
 
 MAX_BATCH_SYMBOLS = 8
@@ -42,6 +52,66 @@ MAX_BATCH_SYMBOLS = 8
 
 class CommentaryError(Exception):
     """Raised when commentary can't be generated (not configured, or the API call failed)."""
+
+
+def _call_anthropic(api_key: str, model: str, system_prompt: str, text: str, image_png: Optional[bytes], max_tokens: int) -> str:
+    client = anthropic.Anthropic(api_key=api_key)
+    user_content: list[dict] = []
+    if image_png:
+        user_content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": base64.standard_b64encode(image_png).decode()},
+        })
+    user_content.append({"type": "text", "text": text})
+
+    try:
+        response = client.messages.create(
+            model=model, max_tokens=max_tokens, system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+    except anthropic.APIError as e:
+        raise CommentaryError(f"Claude API error: {e}")
+
+    result = "".join(block.text for block in response.content if block.type == "text").strip()
+    if not result:
+        raise CommentaryError("Claude returned an empty response.")
+    return result
+
+
+def _call_gemini(api_key: str, model: str, system_prompt: str, text: str, image_png: Optional[bytes], max_tokens: int) -> str:
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types as genai_types
+
+    client = genai.Client(api_key=api_key)
+    contents: list = []
+    if image_png:
+        contents.append(genai_types.Part.from_bytes(data=image_png, mime_type="image/png"))
+    contents.append(text)
+
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(system_instruction=system_prompt, max_output_tokens=max_tokens),
+        )
+    except genai_errors.APIError as e:
+        raise CommentaryError(f"Gemini API error: {e.message}")
+
+    result = (response.text or "").strip()
+    if not result:
+        raise CommentaryError("Gemini returned an empty response.")
+    return result
+
+
+async def _call_model(
+    provider: str, model: str, api_key: str, system_prompt: str, text: str,
+    image_png: Optional[bytes], max_tokens: int,
+) -> str:
+    """Dispatches to whichever provider's SDK the active model needs. Both SDKs
+    are synchronous, so both run via asyncio.to_thread rather than blocking the event loop."""
+    fn = _call_anthropic if provider == "anthropic" else _call_gemini
+    return await asyncio.to_thread(fn, api_key, model, system_prompt, text, image_png, max_tokens)
 
 
 def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optional[dict]) -> str:
@@ -169,7 +239,7 @@ async def generate_commentary(db: AsyncSession, user: Optional[User], symbol: st
     settings = await get_settings(db)
     if not settings["configured"]:
         raise CommentaryError(
-            "Claude API key not configured. Add it in Settings → AI Commentary."
+            f"{settings['provider'].title()} API key not configured. Add it in Settings → AI Commentary."
         )
 
     # Reuse the exact same analysis/fundamentals/regime logic the rest of the app already has —
@@ -232,33 +302,17 @@ async def generate_commentary(db: AsyncSession, user: Optional[User], symbol: st
             "chart_included": row.chart_included, "generated_at": row.created_at.isoformat(),
         }
 
-    client = anthropic.Anthropic(api_key=settings["api_key"])
-
-    user_content: list[dict] = []
-    if chart_png:
-        user_content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": base64.standard_b64encode(chart_png).decode()},
-        })
-    user_content.append({"type": "text", "text": context})
-
     try:
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=settings["model"],
+        text = await _call_model(
+            settings["provider"], settings["model"], settings["api_key"],
+            prompt_row.content, context, chart_png,
             # The full research-report system prompt asks for ~16 structured
             # sections — 600 tokens (a quick take) isn't nearly enough for it.
             max_tokens=4096,
-            system=prompt_row.content,
-            messages=[{"role": "user", "content": user_content}],
         )
-    except anthropic.APIError as e:
-        logger.error("ai_commentary_failed", symbol=symbol, error=str(e))
-        raise CommentaryError(f"Claude API error: {e}")
-
-    text = "".join(block.text for block in response.content if block.type == "text").strip()
-    if not text:
-        raise CommentaryError("Claude returned an empty response.")
+    except CommentaryError as e:
+        logger.error("ai_commentary_failed", symbol=symbol, provider=settings["provider"], error=str(e))
+        raise
 
     row = AICommentary(
         symbol=symbol.upper(),
@@ -297,6 +351,9 @@ def _quick_context(analysis: dict) -> str:
         f"Entry: {ee.get('entry_zone')} | Stop: {ee.get('stop_loss')} | Target: {ee.get('target_1')} | R:R {ee.get('risk_reward')}",
         f"5D model: up {dp.get('up')}, down {dp.get('down')}, confidence {p5d.get('confidence')}",
     ]
+    holding = s.get("holding") or {}
+    if holding.get("is_holding"):
+        lines.append(f"EXISTING HOLDING (from the user's live broker account) — engine says: {holding.get('action')}")
     top_positive = (evidence.get("positive") or [{}])[0].get("factor")
     top_negative = (evidence.get("negative") or [{}])[0].get("factor")
     if top_positive:
@@ -308,7 +365,7 @@ def _quick_context(analysis: dict) -> str:
 
 async def generate_batch_commentary(db: AsyncSession, user: Optional[User], symbols: list[str]) -> dict:
     """
-    One cheaper, shallower Claude call covering several stocks at once — a
+    One cheaper, shallower call (whichever provider is active) covering several stocks at once — a
     condensed verdict per stock rather than the full 16-section report.
     """
     symbols = [s.strip().upper() for s in symbols if s.strip()]
@@ -319,7 +376,7 @@ async def generate_batch_commentary(db: AsyncSession, user: Optional[User], symb
 
     settings = await get_settings(db)
     if not settings["configured"]:
-        raise CommentaryError("Claude API key not configured. Add it in Settings → AI Commentary.")
+        raise CommentaryError(f"{settings['provider'].title()} API key not configured. Add it in Settings → AI Commentary.")
 
     from app.api.routes.signals import analyze_stock
 
@@ -343,8 +400,9 @@ async def generate_batch_commentary(db: AsyncSession, user: Optional[User], symb
         "from your system prompt for this request:\n\n"
         "**SYMBOL** — FINAL ACTION (one of: BUY NOW — SMALL STARTER / BUY ON DIP / WAIT FOR BREAKOUT "
         "CONFIRMATION / WATCH / AVOID) — one-line reason citing the specific numbers given, labeled "
-        "FACT/ESTIMATE/OPINION per your system prompt's rules. Also flag if the stock is already in my "
-        "listed holdings (existing holding — do not recommend fresh allocation).\n\n"
+        "FACT/ESTIMATE/OPINION per your system prompt's rules. Stocks marked EXISTING HOLDING below are "
+        "already in my live portfolio — for those, say ADD / HOLD / REDUCE instead of a fresh-buy verdict. "
+        "Don't assume any other stock is held.\n\n"
         + "\n\n".join(blocks)
     )
     if failed:
@@ -364,24 +422,16 @@ async def generate_batch_commentary(db: AsyncSession, user: Optional[User], symb
     if row is not None:
         return {"content": row.content, "model": row.model_used, "cached": True, "symbols": sorted_symbols, "generated_at": row.created_at.isoformat()}
 
-    client = anthropic.Anthropic(api_key=settings["api_key"])
     max_tokens = min(300 * len(blocks) + 400, 3000)
 
     try:
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=settings["model"],
-            max_tokens=max_tokens,
-            system=prompt_row.content,
-            messages=[{"role": "user", "content": context}],
+        text = await _call_model(
+            settings["provider"], settings["model"], settings["api_key"],
+            prompt_row.content, context, None, max_tokens,
         )
-    except anthropic.APIError as e:
-        logger.error("ai_batch_commentary_failed", symbols=symbols_key, error=str(e))
-        raise CommentaryError(f"Claude API error: {e}")
-
-    text = "".join(block.text for block in response.content if block.type == "text").strip()
-    if not text:
-        raise CommentaryError("Claude returned an empty response.")
+    except CommentaryError as e:
+        logger.error("ai_batch_commentary_failed", symbols=symbols_key, provider=settings["provider"], error=str(e))
+        raise
 
     row = AIBatchCommentary(symbols=symbols_key, context_hash=context_hash, content=text, model_used=settings["model"])
     db.add(row)

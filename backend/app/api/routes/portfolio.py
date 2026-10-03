@@ -16,7 +16,7 @@ from app.database import get_db
 from app.models.user import User
 from app.services.upstox.auth import UpstoxAuthService
 from app.services.upstox.provider import UpstoxDataProvider
-from app.services.upstox.client import UpstoxDataUnavailableError, UpstoxAPIError
+from app.services.upstox.client import UpstoxDataUnavailableError
 
 router = APIRouter(prefix="/api/portfolio", tags=["Portfolio"])
 logger = get_logger(__name__)
@@ -135,8 +135,13 @@ async def portfolio_overview(
             status_code=503,
             detail="Portfolio data unavailable. Upstox connection issue.",
         )
-    except UpstoxAPIError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+    # No "except UpstoxAPIError" here on purpose — letting it propagate lets the global
+    # handler in app/main.py convert a 401/403 into a 502 with a clear, token-source-aware
+    # message. Re-raising it locally with Upstox's own status code (the old behavior) sent
+    # a raw 401 straight to the browser, which the frontend's session-expiry interceptor
+    # can't tell apart from the *app's own* session actually expiring — it would clear a
+    # freshly-issued, perfectly valid login token and bounce the user back to /login with
+    # "your session expired", even though the problem was only their Upstox connection.
 
 
 @router.get("/holdings")
@@ -260,13 +265,11 @@ async def get_pnl(
     db: AsyncSession = Depends(get_db),
 ):
     """Get trade-wise profit and loss report."""
-    try:
-        provider = await _get_user_provider(user, db)
-        pnl = await provider.get_pnl(from_date, to_date, segment)
-        return pnl
-
-    except UpstoxAPIError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+    # A raised UpstoxAPIError/UpstoxAuthError propagates to the global handler in
+    # app/main.py — see the comment on portfolio_overview above for why this must
+    # not be caught and re-raised locally with Upstox's own status code.
+    provider = await _get_user_provider(user, db)
+    return await provider.get_pnl(from_date, to_date, segment)
 
 
 @router.get("/funds")
@@ -276,10 +279,5 @@ async def get_funds(
     db: AsyncSession = Depends(get_db),
 ):
     """Get fund balance and margin details."""
-    try:
-        provider = await _get_user_provider(user, db)
-        funds = await provider.get_funds_and_margin(segment)
-        return funds
-
-    except UpstoxAPIError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+    provider = await _get_user_provider(user, db)
+    return await provider.get_funds_and_margin(segment)

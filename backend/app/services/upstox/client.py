@@ -34,10 +34,14 @@ upstox_circuit_breaker = CircuitBreaker(
 class UpstoxAPIError(Exception):
     """Base exception for Upstox API errors."""
 
-    def __init__(self, status_code: int, message: str, error_code: str = ""):
+    def __init__(self, status_code: int, message: str, error_code: str = "", token_source: str = ""):
         self.status_code = status_code
         self.message = message
         self.error_code = error_code
+        # "analytics" | "personal" | "" (unknown) — which token this request used, set only for
+        # auth errors (see UpstoxClient._request) so the global handler in app/main.py can say
+        # exactly which credential needs attention instead of guessing at both.
+        self.token_source = token_source
         super().__init__(f"Upstox API Error [{status_code}]: {message}")
 
 
@@ -175,11 +179,24 @@ class UpstoxClient:
                 await asyncio.sleep(retry_after)
                 raise UpstoxRateLimitError(429, "Rate limit exceeded")
 
-            # Handle auth errors
+            # Handle auth errors — parse Upstox's real error body instead of discarding it.
+            # A 401/403 doesn't always mean "expired": it's also returned for a malformed
+            # token, a token lacking scope for this specific endpoint, or one that was
+            # revoked by generating a newer one elsewhere — the errorCode/message below is
+            # what actually distinguishes those, and the caller (app/main.py's exception
+            # handler) relays it verbatim instead of guessing "expired or invalid" for every case.
             if response.status_code in (401, 403):
+                try:
+                    body = response.json() if response.content else {}
+                except ValueError:
+                    body = {}
+                first_error = (body.get("errors") or [{}])[0]
+                token_source = "analytics" if self._access_token and self._access_token == settings.upstox_analytics_token else "personal"
                 raise UpstoxAuthError(
                     response.status_code,
-                    f"Authentication failed: {response.text}",
+                    first_error.get("message") or body.get("message") or response.text or "no details returned",
+                    first_error.get("errorCode") or body.get("errorCode", ""),
+                    token_source,
                 )
 
             # Handle server errors
