@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     kite_api_secret: str = ""
     kite_redirect_uri: str = "http://localhost:8000/api/auth/kite/callback"
 
+    # --- Alpaca (US stocks market data only — quotes/candles/news, never order
+    # execution; the US paper-trading ledger is this app's own, see
+    # app/services/paper_trading.py). Free tier, no KYC: app.alpaca.markets/signup.
+    alpaca_api_key_id: str = ""
+    alpaca_api_secret_key: str = ""
+
+    # --- SEC EDGAR (US fundamentals — free, no API key, just a descriptive
+    # User-Agent per SEC's fair-access policy). Override with your own contact
+    # string if you want; a generic one is used otherwise.
+    sec_edgar_contact: str = ""
+
     # --- Trailing stop-loss monitor (Kite only — Upstox trails natively via GTT) ---
     trailing_poll_seconds: int = 60
 

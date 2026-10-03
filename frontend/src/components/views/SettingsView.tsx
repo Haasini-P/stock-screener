@@ -295,6 +295,14 @@ function BrokerCredentialsPanel({ isAuthenticated, onSaved }: { isAuthenticated:
           onSaved();
         }}
       />
+      <AlpacaCredentialForm
+        key={`alpaca:${status.data!.alpaca.client_id}`}
+        current={status.data!.alpaca}
+        onSaved={() => {
+          status.reload();
+          onSaved();
+        }}
+      />
     </div>
   );
 }
@@ -379,6 +387,64 @@ function BrokerCredentialForm({
           mismatch here is the #1 cause of a &ldquo;client_id and redirect_uri&rdquo; / invalid-config
           error from {PROVIDER_LABEL[provider]} when connecting.
         </p>
+      </div>
+      <button type="submit" className="btn-primary text-xs" disabled={saving}>
+        <Save size={13} /> {saving ? "Saving…" : "Save"}
+      </button>
+    </form>
+  );
+}
+
+function AlpacaCredentialForm({ current, onSaved }: { current: BrokerCredentialStatus; onSaved: () => void }) {
+  const { toast } = useAppStore();
+  const [clientId, setClientId] = useState(current.client_id);
+  const [clientSecret, setClientSecret] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientId.trim()) return toast("Enter the Alpaca API Key ID.", "error");
+    setSaving(true);
+    try {
+      await brokerSettingsAPI.updateAlpaca({ client_id: clientId.trim(), client_secret: clientSecret || undefined });
+      toast("Alpaca credentials saved", "success");
+      onSaved();
+    } catch (err) {
+      toast(errorMessage(err, "Could not save Alpaca credentials."), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-3 p-3 rounded-lg" style={{ border: "1px solid var(--border-subtle)" }}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Alpaca (US stocks)</span>
+        <span className={`badge ${current.configured ? "badge-bullish" : "badge-neutral"}`}>
+          {current.configured ? "Configured" : "Not configured"}
+        </span>
+      </div>
+      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+        Powers real US quotes, charts and news on the US Stocks page (~15-min delayed, free tier). No OAuth —
+        just a key pair from a free account, no KYC needed:{" "}
+        <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: "var(--accent-indigo)" }}>
+          app.alpaca.markets/signup
+        </a>
+      </p>
+      <div>
+        <label className="field-label">API Key ID</label>
+        <input className="input text-xs" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+      </div>
+      <div>
+        <label className="field-label">Secret Key</label>
+        <input
+          className="input text-xs"
+          type="password"
+          value={clientSecret}
+          onChange={(e) => setClientSecret(e.target.value)}
+          placeholder={current.has_secret ? "•••••••• (unchanged)" : "Not set"}
+          autoComplete="new-password"
+        />
       </div>
       <button type="submit" className="btn-primary text-xs" disabled={saving}>
         <Save size={13} /> {saving ? "Saving…" : "Save"}

@@ -20,6 +20,7 @@ Do these once, in **Settings**:
 | Connect your broker account | Settings → Linked Accounts, or the Portfolio page | Required for Portfolio, Buy/Sell, and "Add or remove?" recommendations. |
 | AI provider key(s) | Settings → AI Commentary | Add an Anthropic (Claude) key, a Google (Gemini) key, or both, then pick the **Active model**. Gemini keys from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) include a free, rate-limited tier. |
 | Capital and risk per trade | Settings → Portfolio & risk | Drives position sizes everywhere (default ₹2,00,000 at 0.75% risk). |
+| Alpaca API key (optional) | Settings → Broker API Credentials | Powers real US quotes/charts/news on the **US Stocks** page. Free, no KYC — sign up at [app.alpaca.markets/signup](https://app.alpaca.markets/signup). Without it, that page still works for paper trading and fundamentals (SEC EDGAR needs no key), just without a live chart. |
 
 **Two different Upstox tokens — don't mix them up:**
 - The **analytics token** (in `.env`) is long-lived and used for market data.
@@ -76,10 +77,13 @@ Price, day-change and **BUY-signal** alerts, checked against live data every min
 The system prompt every AI commentary call uses (single-stock and batch, Claude and Gemini). Edit and **Save prompt** (requires sign-in), or **Suggest** a draft based on the current market regime. A saved change applies to the very next AI call — previously cached commentary is automatically invalidated.
 
 ### US Stocks
-Paper trading and AI research notes for a small approved list of US tickers — **not** a live report like the Indian Stock Report. Upstox's public API has no individual US equity data (only Indian exchanges plus a few global index quotes), so this page is honest about that instead of pretending otherwise:
-- **Paper Trading Desk** — place simulated BUY/SELL orders (you enter the fill price yourself, since there's no live US quote to execute against), see the resulting ledger and computed positions/realized P&L. No real brokerage call. Selling more than you hold is rejected (paper trading here is long-only, no shorting).
-- **Trade History & Taxes** — every closed buy/sell pair, FIFO-matched (oldest shares sold first, the IRS default method), with holding period, Short-term/Long-term classification (>365 days held = long-term) and an **estimated** tax on the gain. A summary strip at the top totals realized gain, estimated tax, net after-tax, and the short-term/long-term split across all your paper trades. The tax figure uses simplified flat rates (24% short-term, 15% long-term) and is clearly labeled as an estimate, not tax advice — it doesn't account for your real income bracket, filing status, state taxes, or loss offsetting between trades. Also shown as a summary card on the Dashboard.
-- **AI Research Notes** — the model's own general knowledge about the company (business, products, known risks), always labeled **GENERAL_KNOWLEDGE — not live/verified data**. Never a price, financial figure, or trading signal.
+A separate report page for a small approved list of US tickers, visually distinguished (blue accent) from the Indian Stock Report since it's built on different data sources:
+- **Quote, chart, technicals, trade plan, term outlook and multi-horizon model outlook** — real, once you add a free Alpaca key (Settings → Broker API Credentials): quotes/candles are Alpaca's free tier (~15-min delayed), the same technical-indicator engine and ML predictions used for Indian stocks run on them. Without a key, these sections show plainly why (no live data yet) instead of fabricating anything.
+- **Fundamentals** — real annual revenue/net income/assets/liabilities/cash flow/EPS from SEC EDGAR's official filings. Free, no key, always on regardless of Alpaca.
+- **News** — Alpaca's free Benzinga-sourced feed, once a key is added.
+- **AI Research Notes** — a full institutional-grade analysis (same rigor as the Indian report) when real Alpaca+SEC data is available for the symbol; otherwise falls back to the model's own general knowledge about the company, clearly labeled **GENERAL_KNOWLEDGE — not live/verified data**.
+- **Paper Trading Desk** — place simulated BUY/SELL orders (you enter the fill price yourself — there's no live quote to execute against even with Alpaca connected, since this never places real orders), see the resulting ledger and computed positions/realized P&L. Selling more than you hold is rejected (long-only, no shorting).
+- **Trade History & Taxes** — every closed buy/sell pair, FIFO-matched (oldest shares sold first, the IRS default method), with holding period, Short-term/Long-term classification (>365 days held = long-term) and an **estimated** tax on the gain. A summary strip totals realized gain, estimated tax, net after-tax, and the short-term/long-term split across all your paper trades — simplified flat rates (24% short-term, 15% long-term), clearly labeled as an estimate, not tax advice. Also shown as a summary card on the Dashboard.
 
 ### Settings
 Account, broker and AI credentials, model training, risk, display/notification preferences, system status, and dev-only service restart buttons.

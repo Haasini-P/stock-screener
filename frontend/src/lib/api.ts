@@ -276,10 +276,16 @@ export interface BrokerCredentialUpdate {
   redirect_uri: string;
 }
 
+export interface AlpacaCredentialUpdate {
+  client_id: string;
+  client_secret?: string;
+}
+
 export const brokerSettingsAPI = {
-  get: () => api.get<{ upstox: BrokerCredentialStatus; kite: BrokerCredentialStatus }>("/api/settings/brokers"),
+  get: () => api.get<{ upstox: BrokerCredentialStatus; kite: BrokerCredentialStatus; alpaca: BrokerCredentialStatus }>("/api/settings/brokers"),
   updateUpstox: (payload: BrokerCredentialUpdate) => api.put("/api/settings/brokers/upstox", payload),
   updateKite: (payload: BrokerCredentialUpdate) => api.put("/api/settings/brokers/kite", payload),
+  updateAlpaca: (payload: AlpacaCredentialUpdate) => api.put("/api/settings/brokers/alpaca", payload),
 };
 
 export interface ModelPricing {
@@ -404,29 +410,42 @@ export const watchlistAPI = {
 };
 
 // ============================================================
-// US STOCKS (paper trading + AI research notes — no live market data; see
-// backend/app/services/us_market/provider.py for why)
+// US STOCKS (paper trading + real market data via Alpaca once configured,
+// fundamentals via SEC EDGAR always-on; see backend/app/services/us_market/)
 // ============================================================
 
-export interface USQuoteStatus {
+export interface USQuote {
   symbol: string;
   name: string;
   sector: string;
   instrument_key: string;
   data_available: boolean;
-  reason: string;
+  reason?: string;
+  ltp?: number;
+  change?: number;
+  change_pct?: number;
+  prev_close?: number;
+  ohlc?: { open: number; high: number; low: number; close: number };
+  volume?: number;
+  feed_note?: string;
 }
 
 export interface USResearchResult {
   content: string;
   model: string;
   cached: boolean;
+  data_backed: boolean;
   generated_at: string;
 }
 
 export const usMarketAPI = {
   universe: () => api.get<{ universe: Record<string, string[]> }>("/api/us/universe"),
-  quoteStatus: (symbol: string) => api.get<USQuoteStatus>(`/api/us/stocks/${encodeURIComponent(symbol)}/quote-status`),
+  quote: (symbol: string) => api.get<USQuote>(`/api/us/stocks/${encodeURIComponent(symbol)}/quote`),
+  candles: (symbol: string, range: string, interval = "day") =>
+    api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/candles`, { params: { range, interval } }),
+  fundamentals: (symbol: string) => api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/fundamentals`),
+  news: (symbol: string) => api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/news`),
+  analyze: (symbol: string) => api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/analyze`),
   research: (symbol: string) => api.get<USResearchResult>(`/api/us/stocks/${encodeURIComponent(symbol)}/research`),
 };
 

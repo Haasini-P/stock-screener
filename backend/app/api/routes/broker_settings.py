@@ -24,12 +24,19 @@ class BrokerCredentialUpdate(BaseModel):
     redirect_uri: str = Field(min_length=1, max_length=500)
 
 
+class AlpacaCredentialUpdate(BaseModel):
+    """No redirect_uri — Alpaca is a plain API Key ID + Secret pair, not OAuth."""
+    client_id: str = Field(min_length=1, max_length=255)
+    client_secret: Optional[str] = Field(None, max_length=1000)
+
+
 @router.get("")
 async def get_broker_settings(db: AsyncSession = Depends(get_db)):
-    """Current Upstox/Kite app credential status — secrets are never returned."""
+    """Current Upstox/Kite/Alpaca app credential status — secrets are never returned."""
     return {
         "upstox": await get_credentials_public(db, "upstox"),
         "kite": await get_credentials_public(db, "kite"),
+        "alpaca": await get_credentials_public(db, "alpaca"),
     }
 
 
@@ -51,3 +58,14 @@ async def update_kite_settings(
 ):
     """Save the Kite Connect app's API Key / API Secret / Redirect URI."""
     return await set_credentials(db, "kite", body.client_id, body.client_secret, body.redirect_uri, user.email)
+
+
+@router.put("/alpaca")
+async def update_alpaca_settings(
+    body: AlpacaCredentialUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save Alpaca's API Key ID / Secret Key (free tier, no KYC — app.alpaca.markets/signup).
+    Powers real US stock quotes/candles/news on the US Stocks page."""
+    return await set_credentials(db, "alpaca", body.client_id, body.client_secret, "", user.email)

@@ -18,7 +18,7 @@ import {
   CandlestickSeries, createChart, createSeriesMarkers, CrosshairMode, HistogramSeries, IChartApi, ISeriesApi, LineSeries, SeriesMarker, Time,
 } from "lightweight-charts";
 import { Activity, Maximize2, Minimize2 } from "lucide-react";
-import { marketAPI } from "@/lib/api";
+import { marketAPI, usMarketAPI } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { analyzeCandles, CandleRow } from "@/lib/candleAnalysis";
@@ -64,8 +64,11 @@ function barColor(open: number, close: number): string {
   return close >= open ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)";
 }
 
-export default function CandlestickChart({ symbol }: { symbol: string }) {
+export default function CandlestickChart({ symbol, market = "IN" }: { symbol: string; market?: "IN" | "US" }) {
   const { settings } = useAppStore();
+  // US candles are daily-only for now (see backend/app/services/us_market/provider.py) —
+  // no intraday source wired in yet, so 1D/bucket selection doesn't apply there.
+  const ranges = market === "US" ? RANGES.filter((r) => r !== "1D") : RANGES;
   const [range, setRange] = useState<(typeof RANGES)[number]>("6M");
   const [bucketMinutes, setBucketMinutes] = useState(1);
   const [height, setHeight] = useState(320);
@@ -75,7 +78,8 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
   // The effect below only ever does a full chart rebuild when symbol/range/bucket
   // actually change — a poll arriving for the same selection takes the cheap
   // incremental path (series.update() on just the new/changed tail bars).
-  const candles = useApi(() => marketAPI.candles(symbol, range, interval), [symbol, range], { refreshMs: settings.refreshSec * 1000 });
+  const fetchCandles = market === "US" ? usMarketAPI.candles : marketAPI.candles;
+  const candles = useApi(() => fetchCandles(symbol, range, interval), [symbol, market, range], { refreshMs: settings.refreshSec * 1000 });
   const rawRows: CandleRow[] = candles.data?.candles || [];
   const rows = useMemo(
     () => (range === "1D" ? aggregateCandles(rawRows, bucketMinutes) : rawRows),
@@ -295,7 +299,7 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
       <SectionHeader
         icon={<Activity size={16} />}
         title="Chart Analysis"
-        subtitle="Candles, volume, 20/50/200-day MAs & per-candle pattern read — source: Upstox"
+        subtitle={`Candles, volume, 20/50/200-day MAs & per-candle pattern read — source: ${market === "US" ? "Alpaca (~15-min delayed)" : "Upstox"}`}
         actions={
           <>
             {range === "1D" && BUCKETS.map((b) => (
@@ -303,7 +307,7 @@ export default function CandlestickChart({ symbol }: { symbol: string }) {
                 {b.label}
               </button>
             ))}
-            {RANGES.map((r) => (
+            {ranges.map((r) => (
               <button key={r} className={`chip ${range === r ? "chip-active" : ""}`} onClick={() => setRange(r)}>{r}</button>
             ))}
             <button className="btn-ghost text-xs" style={{ padding: "4px 8px" }} onClick={toggleFullscreen} title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}>

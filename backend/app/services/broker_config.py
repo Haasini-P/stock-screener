@@ -28,6 +28,11 @@ _ENV_DEFAULTS = {
         "client_secret": lambda: settings.kite_api_secret,
         "redirect_uri": lambda: settings.kite_redirect_uri,
     },
+    "alpaca": {
+        "client_id": lambda: settings.alpaca_api_key_id,
+        "client_secret": lambda: settings.alpaca_api_secret_key,
+        "redirect_uri": lambda: "",  # not OAuth — Alpaca is a plain key+secret pair, unused
+    },
 }
 
 
