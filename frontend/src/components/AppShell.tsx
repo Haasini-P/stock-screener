@@ -14,6 +14,7 @@ import {
   Bell,
   BellRing,
   Brain,
+  DollarSign,
   FileText,
   Globe,
   LayoutDashboard,
@@ -48,6 +49,7 @@ export const NAV_ITEMS: { id: Tab; label: string; icon: typeof LayoutDashboard }
   { id: "alerts", label: "Alerts", icon: Bell },
   { id: "prompt", label: "AI Prompt", icon: Sparkles },
   { id: "report", label: "Stock Report", icon: FileText },
+  { id: "us_stocks", label: "US Stocks", icon: DollarSign },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 

@@ -10,6 +10,9 @@ export const fmtNum = (v: number | null | undefined, digits = 2): string =>
 export const fmtINR = (v: number | null | undefined, digits = 2): string =>
   v == null || Number.isNaN(v) ? "—" : `₹${fmtNum(v, digits)}`;
 
+export const fmtUSD = (v: number | null | undefined, digits = 2): string =>
+  v == null || Number.isNaN(v) ? "—" : `$${v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+
 /** Compact ₹ amounts: 1.2 L, 3.4 Cr. */
 export const fmtINRCompact = (v: number | null | undefined): string => {
   if (v == null || Number.isNaN(v)) return "—";

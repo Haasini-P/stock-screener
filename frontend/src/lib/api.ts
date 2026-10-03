@@ -403,4 +403,55 @@ export const watchlistAPI = {
   remove: (symbol: string) => api.delete(`/api/watchlist/${encodeURIComponent(symbol)}`),
 };
 
+// ============================================================
+// US STOCKS (paper trading + AI research notes — no live market data; see
+// backend/app/services/us_market/provider.py for why)
+// ============================================================
+
+export interface USQuoteStatus {
+  symbol: string;
+  name: string;
+  sector: string;
+  instrument_key: string;
+  data_available: boolean;
+  reason: string;
+}
+
+export interface USResearchResult {
+  content: string;
+  model: string;
+  cached: boolean;
+  generated_at: string;
+}
+
+export const usMarketAPI = {
+  universe: () => api.get<{ universe: Record<string, string[]> }>("/api/us/universe"),
+  quoteStatus: (symbol: string) => api.get<USQuoteStatus>(`/api/us/stocks/${encodeURIComponent(symbol)}/quote-status`),
+  research: (symbol: string) => api.get<USResearchResult>(`/api/us/stocks/${encodeURIComponent(symbol)}/research`),
+};
+
+export interface PaperOrder {
+  id: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  fill_price: number;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface PaperPosition {
+  symbol: string;
+  quantity: number;
+  avg_cost: number;
+  realized_pnl: number;
+}
+
+export const paperTradingAPI = {
+  placeOrder: (payload: { symbol: string; side: "BUY" | "SELL"; quantity: number; fill_price: number; notes?: string }) =>
+    api.post<PaperOrder>("/api/us/paper/orders", payload),
+  orders: (symbol?: string) => api.get<{ orders: PaperOrder[] }>("/api/us/paper/orders", { params: symbol ? { symbol } : undefined }),
+  positions: () => api.get<{ positions: PaperPosition[] }>("/api/us/paper/positions"),
+};
+
 export default api;

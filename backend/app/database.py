@@ -73,7 +73,7 @@ async def init_db() -> None:
     circular import — found by actually testing a from-scratch Postgres).
     """
     from app.models import (  # noqa: F401
-        ai_commentary, broker_credential, market, portfolio, prediction,
+        ai_commentary, broker_credential, market, paper_trading, portfolio, prediction,
         prompt, tracked_bracket, user, watchlist,
     )
 

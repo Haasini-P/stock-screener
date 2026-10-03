@@ -37,6 +37,7 @@ export interface Settings {
   riskPct: number;
   refreshSec: number; // 0 = auto-refresh off
   browserNotifications: boolean;
+  usCapital: number; // paper-trading capital for the US Stocks tab (display only — no real sizing math yet)
 }
 
 export interface Toast {
@@ -55,7 +56,7 @@ export interface AppNotification {
 
 export const TABS = [
   "dashboard", "scanner", "predictions", "portfolio", "signals",
-  "analytics", "sectors", "news", "alerts", "prompt", "report", "settings",
+  "analytics", "sectors", "news", "alerts", "prompt", "report", "us_stocks", "settings",
 ] as const;
 export type Tab = (typeof TABS)[number];
 
@@ -64,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   riskPct: 0.75,
   refreshSec: 60,
   browserNotifications: false,
+  usCapital: 10000,
 };
 
 const SETTINGS_KEY = "stockmind_settings";

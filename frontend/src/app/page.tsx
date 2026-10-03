@@ -14,6 +14,7 @@ import ScannerView from "@/components/views/ScannerView";
 import SectorsView from "@/components/views/SectorsView";
 import SettingsView from "@/components/views/SettingsView";
 import SignalsView from "@/components/views/SignalsView";
+import USStockView from "@/components/views/USStockView";
 import { Tab, TABS, useAppStore } from "@/lib/store";
 
 const VIEWS: Record<Tab, () => React.JSX.Element> = {
@@ -28,6 +29,7 @@ const VIEWS: Record<Tab, () => React.JSX.Element> = {
   alerts: AlertsView,
   prompt: PromptView,
   report: ReportView,
+  us_stocks: USStockView,
   settings: SettingsView,
 };
 
@@ -43,6 +45,7 @@ const TITLES: Record<Tab, string> = {
   alerts: "Alerts",
   prompt: "AI Prompt",
   report: "Stock Report",
+  us_stocks: "US Stocks",
   settings: "Settings",
 };
 

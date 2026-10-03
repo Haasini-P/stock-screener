@@ -75,6 +75,11 @@ Price, day-change and **BUY-signal** alerts, checked against live data every min
 ### AI Prompt
 The system prompt every AI commentary call uses (single-stock and batch, Claude and Gemini). Edit and **Save prompt** (requires sign-in), or **Suggest** a draft based on the current market regime. A saved change applies to the very next AI call — previously cached commentary is automatically invalidated.
 
+### US Stocks
+Paper trading and AI research notes for a small approved list of US tickers — **not** a live report like the Indian Stock Report. Upstox's public API has no individual US equity data (only Indian exchanges plus a few global index quotes), so this page is honest about that instead of pretending otherwise:
+- **Paper Trading Desk** — place simulated BUY/SELL orders (you enter the fill price yourself, since there's no live US quote to execute against), see the resulting ledger and computed positions/realized P&L. No real brokerage call.
+- **AI Research Notes** — the model's own general knowledge about the company (business, products, known risks), always labeled **GENERAL_KNOWLEDGE — not live/verified data**. Never a price, financial figure, or trading signal.
+
 ### Settings
 Account, broker and AI credentials, model training, risk, display/notification preferences, system status, and dev-only service restart buttons.
 
