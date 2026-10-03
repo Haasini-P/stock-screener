@@ -16,13 +16,13 @@
  */
 
 import { useState } from "react";
-import { AlertTriangle, DollarSign, Sparkles, TrendingDown, TrendingUp } from "lucide-react";
-import { PaperOrder, PaperPosition, USResearchResult, errorMessage, paperTradingAPI, usMarketAPI } from "@/lib/api";
+import { AlertTriangle, DollarSign, Receipt, Sparkles, TrendingDown, TrendingUp } from "lucide-react";
+import { PaperOrder, PaperPosition, PaperTaxSummary, PaperTrade, USResearchResult, errorMessage, paperTradingAPI, usMarketAPI } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import { fmtUSD, timeAgo } from "@/lib/format";
+import { fmtDate, fmtUSD, timeAgo } from "@/lib/format";
 import PaperOrderDialog from "../PaperOrderDialog";
 import MarkdownContent from "../MarkdownContent";
-import { Card, EmptyState, ErrorState, LoadingRows, PageHeader, SectionHeader } from "../ui";
+import { Card, EmptyState, ErrorState, KeyValue, LoadingRows, PageHeader, SectionHeader } from "../ui";
 
 function USResearchNotes({ symbol }: { symbol: string }) {
   const [open, setOpen] = useState(false);
@@ -83,7 +83,7 @@ function PositionsTable({ positions }: { positions: PaperPosition[] }) {
   return (
     <div className="table-scroll">
       <table className="data-table">
-        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg cost</th><th>Realized P&L</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg cost</th><th>Realized P&L</th><th>Est. tax</th><th>After-tax</th></tr></thead>
         <tbody>
           {positions.map((p) => (
             <tr key={p.symbol}>
@@ -93,11 +93,67 @@ function PositionsTable({ positions }: { positions: PaperPosition[] }) {
               <td className={`tabular-nums ${p.realized_pnl > 0 ? "text-bullish" : p.realized_pnl < 0 ? "text-bearish" : ""}`}>
                 {fmtUSD(p.realized_pnl)}
               </td>
+              <td className="tabular-nums" style={{ color: "var(--text-muted)" }}>{fmtUSD(p.estimated_tax)}</td>
+              <td className="tabular-nums font-semibold">{fmtUSD(p.realized_pnl - p.estimated_tax)}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function TradesTable({ trades }: { trades: PaperTrade[] }) {
+  if (!trades.length) {
+    return <p className="text-xs" style={{ color: "var(--text-muted)" }}>No closed paper trades yet — sell part of a position to see buy/sell detail and estimated tax here.</p>;
+  }
+  return (
+    <div className="table-scroll">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Qty</th><th>Bought</th><th>Sold</th><th>Held</th><th>Term</th>
+            <th>Cost basis</th><th>Proceeds</th><th>Gain</th><th>Est. tax</th><th>After-tax</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((t, i) => (
+            <tr key={i}>
+              <td className="font-semibold">{t.symbol}</td>
+              <td className="tabular-nums">{t.quantity}</td>
+              <td className="text-xs" style={{ color: "var(--text-muted)" }}>{fmtDate(t.buy_date)}</td>
+              <td className="text-xs" style={{ color: "var(--text-muted)" }}>{fmtDate(t.sell_date)}</td>
+              <td className="tabular-nums text-xs">{t.holding_days}d</td>
+              <td><span className={`badge ${t.term === "long_term" ? "badge-info" : "badge-neutral"}`}>{t.term === "long_term" ? "Long-term" : "Short-term"}</span></td>
+              <td className="tabular-nums">{fmtUSD(t.cost_basis)}</td>
+              <td className="tabular-nums">{fmtUSD(t.proceeds)}</td>
+              <td className={`tabular-nums ${t.gain > 0 ? "text-bullish" : t.gain < 0 ? "text-bearish" : ""}`}>{fmtUSD(t.gain)}</td>
+              <td className="tabular-nums" style={{ color: "var(--text-muted)" }}>{fmtUSD(t.estimated_tax)} <span className="text-[10px]">({(t.tax_rate * 100).toFixed(0)}%)</span></td>
+              <td className="tabular-nums font-semibold">{fmtUSD(t.after_tax_gain)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TaxSummaryStrip({ summary }: { summary: PaperTaxSummary }) {
+  return (
+    <Card className="space-y-3">
+      <SectionHeader icon={<Receipt size={16} />} title="Paper P&L and Estimated Tax" subtitle="All symbols combined, FIFO-matched" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KeyValue label="Total realized gain" value={fmtUSD(summary.total_realized_gain)} valueColor={summary.total_realized_gain >= 0 ? "var(--color-bullish)" : "var(--color-bearish)"} />
+        <KeyValue label="Estimated tax" value={fmtUSD(summary.total_estimated_tax)} />
+        <KeyValue label="Net after-tax" value={fmtUSD(summary.net_after_tax)} valueColor={summary.net_after_tax >= 0 ? "var(--color-bullish)" : "var(--color-bearish)"} />
+        <KeyValue label="Closed trades" value={summary.closed_trade_count} />
+        <KeyValue label="Short-term gain" value={`${fmtUSD(summary.short_term_gain)} (tax ${fmtUSD(summary.short_term_tax)})`} />
+        <KeyValue label="Long-term gain" value={`${fmtUSD(summary.long_term_gain)} (tax ${fmtUSD(summary.long_term_tax)})`} />
+        <KeyValue label="Open positions" value={summary.open_positions_count} />
+        <KeyValue label="Open cost basis" value={fmtUSD(summary.open_cost_basis)} />
+      </div>
+      <p className="text-[10px] leading-relaxed" style={{ color: "var(--text-muted)" }}>{summary.disclaimer}</p>
+    </Card>
   );
 }
 
@@ -132,11 +188,15 @@ export default function USStockView() {
   const universe = useApi(() => usMarketAPI.universe(), []);
   const positions = useApi(() => paperTradingAPI.positions(), []);
   const orders = useApi(() => paperTradingAPI.orders(symbol || undefined), [symbol]);
+  const trades = useApi(() => paperTradingAPI.trades(symbol || undefined), [symbol]);
+  const summary = useApi(() => paperTradingAPI.summary(), []);
 
   const afterOrderPlaced = () => {
     setOrder(null);
     positions.reload();
     orders.reload();
+    trades.reload();
+    summary.reload();
   };
 
   return (
@@ -156,6 +216,15 @@ export default function USStockView() {
           labeled as such — never treat either as live market data.
         </p>
       </div>
+
+      {/* Overall paper P&L and estimated tax — all symbols, always visible */}
+      {summary.loading ? (
+        <Card><LoadingRows rows={2} /></Card>
+      ) : summary.error ? (
+        <ErrorState message={summary.error} onRetry={summary.reload} />
+      ) : summary.data ? (
+        <TaxSummaryStrip summary={summary.data} />
+      ) : null}
 
       {/* Universe browser */}
       <Card>
@@ -218,6 +287,15 @@ export default function USStockView() {
                 <OrdersTable orders={orders.data?.orders || []} />
               )}
             </div>
+          </Card>
+
+          <Card>
+            <SectionHeader icon={<Receipt size={16} />} title={`Trade History & Taxes — ${symbol}`} subtitle="Every closed buy/sell pair, FIFO-matched, with holding period and estimated tax" />
+            {trades.loading ? <LoadingRows rows={3} /> : trades.error ? (
+              <ErrorState message={trades.error} onRetry={trades.reload} />
+            ) : (
+              <TradesTable trades={trades.data?.trades || []} />
+            )}
           </Card>
 
           <Card>

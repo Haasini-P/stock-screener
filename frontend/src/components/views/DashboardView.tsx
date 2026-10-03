@@ -6,6 +6,7 @@ import {
   Brain,
   ChevronRight,
   Clock,
+  DollarSign,
   FileSearch,
   Globe,
   LineChart,
@@ -16,10 +17,10 @@ import {
   Wallet,
   Zap,
 } from "lucide-react";
-import { marketAPI, signalsAPI, watchlistAPI } from "@/lib/api";
+import { marketAPI, paperTradingAPI, signalsAPI, watchlistAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtDate, fmtINR, fmtINRCompact, fmtNum, fmtPct, fmtTime, tone, toneColor } from "@/lib/format";
+import { fmtDate, fmtINR, fmtINRCompact, fmtNum, fmtPct, fmtTime, fmtUSD, tone, toneColor } from "@/lib/format";
 import { useNavigateTab } from "../AppShell";
 import SearchBox from "../SearchBox";
 import { BucketChips, Card, Change, EmptyState, EntryBadge, ErrorState, Skeleton, StockLink } from "../ui";
@@ -86,7 +87,7 @@ function MetricCard({
 }
 
 export default function DashboardView() {
-  const { settings, setSelectedSector, setReportSymbol } = useAppStore();
+  const { settings, setSelectedSector, setReportSymbol, isAuthenticated } = useAppStore();
   const navigate = useNavigateTab();
   const refreshMs = settings.refreshSec * 1000;
 
@@ -95,6 +96,7 @@ export default function DashboardView() {
   const sectors = useApi(() => marketAPI.sectors(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
   const daily = useApi(() => signalsAPI.dailyList(portfolioParams(settings)), [settings.capital, settings.riskPct]);
   const watchlist = useApi(() => watchlistAPI.list(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
+  const usSummary = useApi(() => paperTradingAPI.summary(), [], { enabled: isAuthenticated });
 
   const openReport = (symbol: string) => {
     setReportSymbol(symbol);
@@ -272,6 +274,38 @@ export default function DashboardView() {
                 <div><p className="font-semibold" style={{ color: "var(--text-primary)" }}>{daily.data.capital_deployment.suggested_deployment_pct}%</p><p>Deploy now</p></div>
               )}
             </div>
+          </button>
+
+          <button className="glass-card p-5 w-full text-left" onClick={() => navigate("us_stocks")}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <DollarSign size={16} style={{ color: "var(--accent-indigo)" }} />
+                <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>US Paper Trading</h3>
+              </div>
+              <ChevronRight size={14} style={{ color: "var(--text-muted)" }} />
+            </div>
+            {!isAuthenticated ? (
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Sign in to track simulated US stock trades and estimated tax.</p>
+            ) : usSummary.loading ? (
+              <Skeleton className="h-8 w-32" />
+            ) : usSummary.error ? (
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>No paper trading activity yet.</p>
+            ) : usSummary.data ? (
+              <>
+                <p
+                  className="text-lg font-bold tabular-nums"
+                  style={{ color: usSummary.data.net_after_tax >= 0 ? "var(--color-bullish)" : "var(--color-bearish)" }}
+                >
+                  {fmtUSD(usSummary.data.net_after_tax)}
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>Net after estimated tax</p>
+                <div className="flex gap-6 mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                  <div><p className="font-semibold" style={{ color: "var(--text-primary)" }}>{fmtUSD(usSummary.data.total_realized_gain)}</p><p>Realized gain</p></div>
+                  <div><p className="font-semibold" style={{ color: "var(--text-primary)" }}>{fmtUSD(usSummary.data.total_estimated_tax)}</p><p>Est. tax</p></div>
+                  <div><p className="font-semibold" style={{ color: "var(--text-primary)" }}>{usSummary.data.open_positions_count}</p><p>Open positions</p></div>
+                </div>
+              </>
+            ) : null}
           </button>
 
           <Card padded={false}>

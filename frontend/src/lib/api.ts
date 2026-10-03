@@ -445,6 +445,37 @@ export interface PaperPosition {
   quantity: number;
   avg_cost: number;
   realized_pnl: number;
+  estimated_tax: number;
+}
+
+export interface PaperTrade {
+  symbol: string;
+  quantity: number;
+  buy_date: string;
+  sell_date: string;
+  holding_days: number;
+  term: "short_term" | "long_term";
+  cost_basis: number;
+  proceeds: number;
+  gain: number;
+  tax_rate: number;
+  estimated_tax: number;
+  after_tax_gain: number;
+}
+
+export interface PaperTaxSummary {
+  total_realized_gain: number;
+  total_estimated_tax: number;
+  net_after_tax: number;
+  short_term_gain: number;
+  short_term_tax: number;
+  long_term_gain: number;
+  long_term_tax: number;
+  closed_trade_count: number;
+  open_positions_count: number;
+  open_cost_basis: number;
+  tax_rates: { short_term: number; long_term: number };
+  disclaimer: string;
 }
 
 export const paperTradingAPI = {
@@ -452,6 +483,8 @@ export const paperTradingAPI = {
     api.post<PaperOrder>("/api/us/paper/orders", payload),
   orders: (symbol?: string) => api.get<{ orders: PaperOrder[] }>("/api/us/paper/orders", { params: symbol ? { symbol } : undefined }),
   positions: () => api.get<{ positions: PaperPosition[] }>("/api/us/paper/positions"),
+  trades: (symbol?: string) => api.get<{ trades: PaperTrade[] }>("/api/us/paper/trades", { params: symbol ? { symbol } : undefined }),
+  summary: () => api.get<PaperTaxSummary>("/api/us/paper/summary"),
 };
 
 export default api;

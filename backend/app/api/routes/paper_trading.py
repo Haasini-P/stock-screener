@@ -15,7 +15,8 @@ from app.api.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
 from app.services.paper_trading import (
-    PaperTradingError, compute_positions, list_paper_orders, place_paper_order,
+    PaperTradingError, compute_closed_trades, compute_positions, compute_tax_summary,
+    list_paper_orders, place_paper_order,
 )
 
 router = APIRouter(prefix="/api/us/paper", tags=["US Paper Trading"])
@@ -68,6 +69,25 @@ async def my_orders(
 
 @router.get("/positions")
 async def my_positions(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Net quantity, weighted-average cost and realized P&L per symbol, computed
-    from the order ledger. No unrealized P&L — no live price to mark against."""
+    """Net quantity, weighted-average cost, realized P&L and estimated tax per
+    symbol, FIFO-matched from the order ledger. No unrealized P&L — no live
+    price to mark against."""
     return {"positions": await compute_positions(db, user.id)}
+
+
+@router.get("/trades")
+async def my_trades(
+    symbol: Optional[str] = Query(default=None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every closed (FIFO-matched) buy/sell pair with holding period, short/long-term
+    classification and estimated tax — the detailed trade history view."""
+    return {"trades": await compute_closed_trades(db, user.id, symbol)}
+
+
+@router.get("/summary")
+async def my_tax_summary(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Aggregate realized-gain/estimated-tax totals across every symbol — used by
+    the Dashboard's US Paper Trading card and the US Stocks summary strip."""
+    return await compute_tax_summary(db, user.id)

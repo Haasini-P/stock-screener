@@ -77,7 +77,8 @@ The system prompt every AI commentary call uses (single-stock and batch, Claude 
 
 ### US Stocks
 Paper trading and AI research notes for a small approved list of US tickers — **not** a live report like the Indian Stock Report. Upstox's public API has no individual US equity data (only Indian exchanges plus a few global index quotes), so this page is honest about that instead of pretending otherwise:
-- **Paper Trading Desk** — place simulated BUY/SELL orders (you enter the fill price yourself, since there's no live US quote to execute against), see the resulting ledger and computed positions/realized P&L. No real brokerage call.
+- **Paper Trading Desk** — place simulated BUY/SELL orders (you enter the fill price yourself, since there's no live US quote to execute against), see the resulting ledger and computed positions/realized P&L. No real brokerage call. Selling more than you hold is rejected (paper trading here is long-only, no shorting).
+- **Trade History & Taxes** — every closed buy/sell pair, FIFO-matched (oldest shares sold first, the IRS default method), with holding period, Short-term/Long-term classification (>365 days held = long-term) and an **estimated** tax on the gain. A summary strip at the top totals realized gain, estimated tax, net after-tax, and the short-term/long-term split across all your paper trades. The tax figure uses simplified flat rates (24% short-term, 15% long-term) and is clearly labeled as an estimate, not tax advice — it doesn't account for your real income bracket, filing status, state taxes, or loss offsetting between trades. Also shown as a summary card on the Dashboard.
 - **AI Research Notes** — the model's own general knowledge about the company (business, products, known risks), always labeled **GENERAL_KNOWLEDGE — not live/verified data**. Never a price, financial figure, or trading signal.
 
 ### Settings
