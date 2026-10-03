@@ -16,9 +16,13 @@ from app.api.dependencies import get_optional_user
 from app.database import get_db
 from app.models.user import User
 from app.services.ai.commentary_service import CommentaryError
-from app.services.ai.us_commentary_service import generate_us_research
+from app.services.ai.us_commentary_service import generate_us_research, list_recent_research
 from app.services.us_market.analysis import analyze_us_stock
-from app.services.us_market.provider import USDataUnavailableError, get_us_provider
+from app.services.us_market.fx import get_usd_inr_rate
+from app.services.us_market.indices import get_us_indices_history, get_us_indices_latest
+from app.services.us_market.movers import compute_us_movers
+from app.services.us_market.provider import USDataUnavailableError, get_alpaca_client, get_us_provider
+from app.services.us_market.scanner import run_us_scanner
 from app.services.us_market.sec_compaction import compact_fundamentals
 from app.services.us_market.sec_edgar_client import get_company_facts
 from app.services.us_market.universe import US_STOCK_UNIVERSE
@@ -122,3 +126,49 @@ async def us_research(symbol: str, user: Optional[User] = Depends(get_optional_u
         return await generate_us_research(db, user, symbol)
     except CommentaryError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/fx-rate")
+async def fx_rate():
+    """Real USD->INR rate (ECB reference, via Frankfurter, hourly-cached) —
+    for showing paper-trading amounts in both currencies. Never a guessed rate."""
+    return await get_usd_inr_rate()
+
+
+@router.get("/movers")
+async def us_movers(db: AsyncSession = Depends(get_db)):
+    """Gainers/losers/most-active across the approved US universe, ranked from
+    one Alpaca multi-symbol snapshot call. Honest data_available:false when
+    Alpaca isn't configured — never a 500."""
+    return await compute_us_movers(await get_alpaca_client(db))
+
+
+@router.get("/indices/latest")
+async def us_indices_latest(db: AsyncSession = Depends(get_db)):
+    """S&P 500/Nasdaq 100/Dow Jones via their SPY/QQQ/DIA ETF proxies — Alpaca
+    has no direct index quote. For the Dashboard ticker strip."""
+    return await get_us_indices_latest(await get_alpaca_client(db))
+
+
+@router.get("/indices/history")
+async def us_indices_history(range: str = Query(default="1M"), db: AsyncSession = Depends(get_db)):
+    """Daily-bar history for the same three proxies, normalized to % change
+    from the first point in range. For the Dashboard Market Overview chart."""
+    return await get_us_indices_history(await get_alpaca_client(db), range)
+
+
+@router.get("/research/recent")
+async def us_research_recent(limit: int = Query(default=5, ge=1, le=20), db: AsyncSession = Depends(get_db)):
+    """Most recently generated AI research notes, one per distinct symbol —
+    for the Dashboard's "Recent US Analysis" panel."""
+    return {"items": await list_recent_research(db, limit)}
+
+
+@router.get("/scanner")
+async def us_scanner(user: Optional[User] = Depends(get_optional_user), db: AsyncSession = Depends(get_db)):
+    """Technical scan across the default US watchlist, favorable setups
+    first. Never places an order — Buy/Sell on the frontend opens the
+    existing paper-order dialog pre-filled, same confirm-before-acting
+    pattern as everywhere else in this app."""
+    provider = await get_us_provider(db)
+    return await run_us_scanner(provider, user, db)

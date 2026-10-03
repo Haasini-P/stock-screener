@@ -8,11 +8,11 @@
  * execute against yet (see backend/app/services/us_market/provider.py).
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, TrendingDown, TrendingUp } from "lucide-react";
-import { errorMessage, paperTradingAPI } from "@/lib/api";
+import { errorMessage, paperTradingAPI, usMarketAPI } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
-import { fmtUSD } from "@/lib/format";
+import { fmtINR, fmtUSD } from "@/lib/format";
 import { Modal } from "./ui";
 
 export default function PaperOrderDialog({
@@ -21,17 +21,23 @@ export default function PaperOrderDialog({
   symbol,
   side,
   onPlaced,
+  defaultPrice,
+  defaultQuantity,
 }: {
   open: boolean;
   onClose: () => void;
   symbol: string;
   side: "BUY" | "SELL";
   onPlaced?: () => void;
+  /** Pre-fills from a real source (e.g. the scanner's live quote) — the user
+   * can still edit it; this never substitutes for a live price when none exists. */
+  defaultPrice?: number | null;
+  defaultQuantity?: number | null;
 }) {
   // Modal unmounts its children when closed, so the form starts fresh on every open
   return (
     <Modal open={open} onClose={onClose} title={`Paper ${side === "BUY" ? "Buy" : "Sell"} ${symbol}`}>
-      <PaperOrderForm symbol={symbol} side={side} onClose={onClose} onPlaced={onPlaced} />
+      <PaperOrderForm symbol={symbol} side={side} onClose={onClose} onPlaced={onPlaced} defaultPrice={defaultPrice} defaultQuantity={defaultQuantity} />
     </Modal>
   );
 }
@@ -41,19 +47,32 @@ function PaperOrderForm({
   side,
   onClose,
   onPlaced,
+  defaultPrice,
+  defaultQuantity,
 }: {
   symbol: string;
   side: "BUY" | "SELL";
   onClose: () => void;
   onPlaced?: () => void;
+  defaultPrice?: number | null;
+  defaultQuantity?: number | null;
 }) {
   const { toast } = useAppStore();
-  const [quantity, setQuantity] = useState("1");
-  const [fillPrice, setFillPrice] = useState("");
+  const [quantity, setQuantity] = useState(String(defaultQuantity || 1));
+  const [fillPrice, setFillPrice] = useState(defaultPrice ? String(defaultPrice) : "");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [placed, setPlaced] = useState(false);
+  const [fxRate, setFxRate] = useState<number | null>(null);
+
+  useEffect(() => {
+    usMarketAPI.fxRate().then((res) => setFxRate(res.data.rate)).catch(() => setFxRate(null));
+  }, []);
+
+  const qtyNum = Number(quantity) || 0;
+  const priceNum = Number(fillPrice) || 0;
+  const orderValueUsd = qtyNum * priceNum;
 
   const submit = async () => {
     setError("");
@@ -84,6 +103,7 @@ function PaperOrderForm({
         </p>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           {quantity} shares of {symbol} at {fmtUSD(Number(fillPrice))} — simulated only.
+          {fxRate && <> (≈ {fmtINR(Number(fillPrice) * fxRate, 0)}/share)</>}
         </p>
         <button className="btn-primary text-xs" onClick={onClose}>Close</button>
       </div>
@@ -95,8 +115,8 @@ function PaperOrderForm({
       <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]" style={{ background: "rgba(99,102,241,0.08)", color: "var(--text-secondary)" }}>
         <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
         <span>
-          Paper trading only — simulated, no real brokerage call. StockMind has no live US quote
-          yet, so enter the price you&apos;re practicing a fill at.
+          Paper trading only — simulated, no real brokerage call, no real money moves.
+          {defaultPrice ? " Pre-filled with the latest live quote — edit if you want to practice a different fill." : " Enter the price you're practicing a fill at."}
         </span>
       </div>
 
@@ -112,6 +132,15 @@ function PaperOrderForm({
         <label className="field-label">Notes (optional)</label>
         <input type="text" className="input" maxLength={255} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
+
+      {orderValueUsd > 0 && (
+        <div className="flex items-center justify-between text-xs p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-subtle)" }}>
+          <span style={{ color: "var(--text-muted)" }}>Required amount</span>
+          <span className="font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
+            {fmtUSD(orderValueUsd)}{fxRate && <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> (≈ {fmtINR(orderValueUsd * fxRate, 0)})</span>}
+          </span>
+        </div>
+      )}
 
       {error && <p className="text-xs text-bearish">{error}</p>}
 

@@ -655,3 +655,22 @@ async def generate_batch_commentary(db: AsyncSession, user: Optional[User], symb
 
     logger.info("ai_batch_commentary_generated", symbols=symbols_key, model=settings["model"])
     return {"content": text, "model": settings["model"], "cached": False, "symbols": sorted_symbols, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+async def list_recent_commentary(db: AsyncSession, limit: int = 5) -> list[dict]:
+    """Most recently generated Indian AI commentary, one row per distinct
+    symbol — for the Dashboard's "Recent Indian Analysis" panel."""
+    result = await db.execute(
+        select(AICommentary).order_by(AICommentary.created_at.desc()).limit(limit * 4)
+    )
+    rows = result.scalars().all()
+    seen: set[str] = set()
+    recent = []
+    for row in rows:
+        if row.symbol in seen:
+            continue
+        seen.add(row.symbol)
+        recent.append({"symbol": row.symbol, "model": row.model_used, "generated_at": row.created_at.isoformat()})
+        if len(recent) >= limit:
+            break
+    return recent

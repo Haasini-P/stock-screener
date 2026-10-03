@@ -13,6 +13,7 @@ only, never order execution — the US paper-trading ledger
 (app/services/paper_trading.py) remains the system of record for trades.
 """
 
+import re
 from datetime import date, timedelta
 from typing import Optional
 
@@ -23,6 +24,10 @@ from app.services.us_market.alpaca_client import AlpacaAPIError, AlpacaClient
 from app.services.us_market.universe import us_symbol_sector_lookup
 
 _SECTOR_LOOKUP = us_symbol_sector_lookup()
+# Permissive US ticker shape (1-6 letters, optional ".X" share-class suffix like
+# BRK.B) — a format check only. Real existence is validated downstream by
+# Alpaca/SEC actually returning data for it, not by a hardcoded allow-list.
+_TICKER_RE = re.compile(r"^[A-Z]{1,6}(\.[A-Z])?$")
 
 _NOT_CONFIGURED_REASON = (
     "No Alpaca API key configured — add a free key (no KYC needed) in "
@@ -49,13 +54,16 @@ class USMarketProvider:
         self._alpaca = alpaca
 
     async def resolve_instrument(self, symbol: str) -> dict:
+        """Accepts any syntactically plausible US ticker, not just the small
+        default-scanner list — a nonexistent ticker fails naturally downstream
+        (Alpaca/SEC return "not available" for it) rather than being rejected
+        here against a hardcoded allow-list. `_SECTOR_LOOKUP` still enriches
+        the response with a sector label for tickers that happen to be in the
+        scanner's default universe; everything else gets "Unclassified"."""
         symbol = symbol.strip().upper()
-        sector = _SECTOR_LOOKUP.get(symbol)
-        if not sector:
-            raise USDataUnavailableError(
-                f"'{symbol}' is not in StockMind's approved US stock list yet. "
-                f"Approved symbols: {', '.join(sorted(_SECTOR_LOOKUP))}."
-            )
+        if not _TICKER_RE.match(symbol):
+            raise USDataUnavailableError(f"'{symbol}' doesn't look like a valid US ticker symbol.")
+        sector = _SECTOR_LOOKUP.get(symbol, "Unclassified")
         return {
             "symbol": symbol,
             "name": symbol,  # no name-resolution source yet — ticker doubles as display name
@@ -151,11 +159,18 @@ class USMarketProvider:
         return _not_available(reason="No peer-comparison data source configured for US stocks yet.")
 
 
+async def get_alpaca_client(db: AsyncSession) -> Optional[AlpacaClient]:
+    """The raw client, for callers that need Alpaca directly (movers, index
+    proxies) rather than through USMarketProvider's per-symbol shape. None
+    when not configured — callers degrade to the same honest shape."""
+    creds = await get_credentials(db, "alpaca")
+    if not creds["configured"]:
+        return None
+    return AlpacaClient(creds["client_id"], creds["client_secret"])
+
+
 async def get_us_provider(db: AsyncSession) -> USMarketProvider:
     """Attaches a real AlpacaClient only when a key is stored (Settings ->
     Broker API Credentials) or set via ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY —
     otherwise every call degrades to the honest "not configured" shape."""
-    creds = await get_credentials(db, "alpaca")
-    if not creds["configured"]:
-        return USMarketProvider()
-    return USMarketProvider(alpaca=AlpacaClient(creds["client_id"], creds["client_secret"]))
+    return USMarketProvider(alpaca=await get_alpaca_client(db))

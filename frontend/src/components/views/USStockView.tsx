@@ -23,20 +23,31 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, BarChart3, DollarSign, Newspaper, Receipt, Sparkles, Target, TrendingDown, TrendingUp,
+  AlertTriangle, BarChart3, DollarSign, Newspaper, Receipt, Search, Sparkles, Target, TrendingDown, TrendingUp, Zap,
 } from "lucide-react";
 import {
-  PaperOrder, PaperPosition, PaperTaxSummary, PaperTrade, USResearchResult,
+  PaperOrder, PaperPosition, PaperTaxSummary, PaperTrade, USResearchResult, USScannerRow,
   errorMessage, paperTradingAPI, usMarketAPI,
 } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtDate, fmtPct, fmtUSD, timeAgo } from "@/lib/format";
+import { fmtDate, fmtINR, fmtPct, fmtUSD, timeAgo } from "@/lib/format";
 import CandlestickChart from "../CandlestickChart";
 import PaperOrderDialog from "../PaperOrderDialog";
 import MarkdownContent from "../MarkdownContent";
 import SearchBox from "../SearchBox";
 import { Card, EmptyState, EntryBadge, ErrorState, KeyValue, LoadingRows, PageHeader, SectionHeader } from "../ui";
+
+/** USD amount with a small "(≈ ₹...)" suffix when a real FX rate is available —
+ * never shown without a real rate (no guessed conversion). */
+function dualAmount(usd: number, fxRate: number | null): React.ReactNode {
+  return (
+    <>
+      {fmtUSD(usd)}
+      {fxRate != null && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}> (≈{fmtINR(usd * fxRate, 0)})</span>}
+    </>
+  );
+}
 
 const US_ACCENT = "#2563eb"; // this page's own accent — not a shared/global CSS variable
 const HORIZONS = ["1D", "5D", "10D", "20D"];
@@ -162,7 +173,7 @@ function USResearchNotes({ symbol }: { symbol: string }) {
   );
 }
 
-function PositionsTable({ positions }: { positions: PaperPosition[] }) {
+function PositionsTable({ positions, fxRate }: { positions: PaperPosition[]; fxRate: number | null }) {
   if (!positions.length) {
     return <p className="text-xs" style={{ color: "var(--text-muted)" }}>No paper positions yet.</p>;
   }
@@ -175,12 +186,12 @@ function PositionsTable({ positions }: { positions: PaperPosition[] }) {
             <tr key={p.symbol}>
               <td className="font-semibold">{p.symbol}</td>
               <td className="tabular-nums">{p.quantity}</td>
-              <td className="tabular-nums">{fmtUSD(p.avg_cost)}</td>
+              <td className="tabular-nums">{dualAmount(p.avg_cost, fxRate)}</td>
               <td className={`tabular-nums ${p.realized_pnl > 0 ? "text-bullish" : p.realized_pnl < 0 ? "text-bearish" : ""}`}>
-                {fmtUSD(p.realized_pnl)}
+                {dualAmount(p.realized_pnl, fxRate)}
               </td>
-              <td className="tabular-nums" style={{ color: "var(--text-muted)" }}>{fmtUSD(p.estimated_tax)}</td>
-              <td className="tabular-nums font-semibold">{fmtUSD(p.realized_pnl - p.estimated_tax)}</td>
+              <td className="tabular-nums" style={{ color: "var(--text-muted)" }}>{dualAmount(p.estimated_tax, fxRate)}</td>
+              <td className="tabular-nums font-semibold">{dualAmount(p.realized_pnl - p.estimated_tax, fxRate)}</td>
             </tr>
           ))}
         </tbody>
@@ -189,7 +200,7 @@ function PositionsTable({ positions }: { positions: PaperPosition[] }) {
   );
 }
 
-function TradesTable({ trades }: { trades: PaperTrade[] }) {
+function TradesTable({ trades, fxRate }: { trades: PaperTrade[]; fxRate: number | null }) {
   if (!trades.length) {
     return <p className="text-xs" style={{ color: "var(--text-muted)" }}>No closed paper trades yet — sell part of a position to see buy/sell detail and estimated tax here.</p>;
   }
@@ -211,11 +222,11 @@ function TradesTable({ trades }: { trades: PaperTrade[] }) {
               <td className="text-xs" style={{ color: "var(--text-muted)" }}>{fmtDate(t.sell_date)}</td>
               <td className="tabular-nums text-xs">{t.holding_days}d</td>
               <td><span className={`badge ${t.term === "long_term" ? "badge-info" : "badge-neutral"}`}>{t.term === "long_term" ? "Long-term" : "Short-term"}</span></td>
-              <td className="tabular-nums">{fmtUSD(t.cost_basis)}</td>
-              <td className="tabular-nums">{fmtUSD(t.proceeds)}</td>
-              <td className={`tabular-nums ${t.gain > 0 ? "text-bullish" : t.gain < 0 ? "text-bearish" : ""}`}>{fmtUSD(t.gain)}</td>
-              <td className="tabular-nums" style={{ color: "var(--text-muted)" }}>{fmtUSD(t.estimated_tax)} <span className="text-[10px]">({(t.tax_rate * 100).toFixed(0)}%)</span></td>
-              <td className="tabular-nums font-semibold">{fmtUSD(t.after_tax_gain)}</td>
+              <td className="tabular-nums">{dualAmount(t.cost_basis, fxRate)}</td>
+              <td className="tabular-nums">{dualAmount(t.proceeds, fxRate)}</td>
+              <td className={`tabular-nums ${t.gain > 0 ? "text-bullish" : t.gain < 0 ? "text-bearish" : ""}`}>{dualAmount(t.gain, fxRate)}</td>
+              <td className="tabular-nums" style={{ color: "var(--text-muted)" }}>{dualAmount(t.estimated_tax, fxRate)} <span className="text-[10px]">({(t.tax_rate * 100).toFixed(0)}%)</span></td>
+              <td className="tabular-nums font-semibold">{dualAmount(t.after_tax_gain, fxRate)}</td>
             </tr>
           ))}
         </tbody>
@@ -224,19 +235,23 @@ function TradesTable({ trades }: { trades: PaperTrade[] }) {
   );
 }
 
-function TaxSummaryStrip({ summary }: { summary: PaperTaxSummary }) {
+function TaxSummaryStrip({ summary, fxRate }: { summary: PaperTaxSummary; fxRate: number | null }) {
   return (
     <Card className="space-y-3">
-      <SectionHeader icon={<Receipt size={16} />} title="Paper P&L and Estimated Tax" subtitle="All symbols combined, FIFO-matched" />
+      <SectionHeader
+        icon={<Receipt size={16} />}
+        title="Paper P&L and Estimated Tax"
+        subtitle={fxRate ? `All symbols combined, FIFO-matched · $1 ≈ ₹${fxRate.toFixed(2)}` : "All symbols combined, FIFO-matched"}
+      />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KeyValue label="Total realized gain" value={fmtUSD(summary.total_realized_gain)} valueColor={summary.total_realized_gain >= 0 ? "var(--color-bullish)" : "var(--color-bearish)"} />
-        <KeyValue label="Estimated tax" value={fmtUSD(summary.total_estimated_tax)} />
-        <KeyValue label="Net after-tax" value={fmtUSD(summary.net_after_tax)} valueColor={summary.net_after_tax >= 0 ? "var(--color-bullish)" : "var(--color-bearish)"} />
+        <KeyValue label="Total realized gain" value={dualAmount(summary.total_realized_gain, fxRate)} valueColor={summary.total_realized_gain >= 0 ? "var(--color-bullish)" : "var(--color-bearish)"} />
+        <KeyValue label="Estimated tax" value={dualAmount(summary.total_estimated_tax, fxRate)} />
+        <KeyValue label="Net after-tax" value={dualAmount(summary.net_after_tax, fxRate)} valueColor={summary.net_after_tax >= 0 ? "var(--color-bullish)" : "var(--color-bearish)"} />
         <KeyValue label="Closed trades" value={summary.closed_trade_count} />
-        <KeyValue label="Short-term gain" value={`${fmtUSD(summary.short_term_gain)} (tax ${fmtUSD(summary.short_term_tax)})`} />
-        <KeyValue label="Long-term gain" value={`${fmtUSD(summary.long_term_gain)} (tax ${fmtUSD(summary.long_term_tax)})`} />
+        <KeyValue label="Short-term gain" value={<>{dualAmount(summary.short_term_gain, fxRate)} <span className="text-[10px]">(tax {fmtUSD(summary.short_term_tax)})</span></>} />
+        <KeyValue label="Long-term gain" value={<>{dualAmount(summary.long_term_gain, fxRate)} <span className="text-[10px]">(tax {fmtUSD(summary.long_term_tax)})</span></>} />
         <KeyValue label="Open positions" value={summary.open_positions_count} />
-        <KeyValue label="Open cost basis" value={fmtUSD(summary.open_cost_basis)} />
+        <KeyValue label="Open cost basis" value={dualAmount(summary.open_cost_basis, fxRate)} />
       </div>
       <p className="text-[10px] leading-relaxed" style={{ color: "var(--text-muted)" }}>{summary.disclaimer}</p>
     </Card>
@@ -277,10 +292,82 @@ function NotAvailable({ reason }: { reason?: string }) {
   );
 }
 
+/** Technical scan across the default US watchlist — never auto-fires (it's a
+ * ~24-symbol, ~10s scan); the user triggers it explicitly, same as AI Research
+ * Notes elsewhere. Buy/Sell here only opens the paper-order dialog pre-filled
+ * with the scanner's own live price/levels — it never places anything itself. */
+function ScannerPanel({ onBuySell }: { onBuySell: (symbol: string, side: "BUY" | "SELL", price: number | null) => void }) {
+  const [started, setStarted] = useState(false);
+  const scanner = useApi(() => usMarketAPI.scanner(), [], { enabled: started });
+
+  if (!started) {
+    return (
+      <button className="btn-primary text-xs" onClick={() => setStarted(true)}>
+        <Zap size={13} /> Run US Scanner
+      </button>
+    );
+  }
+  if (scanner.loading) return <LoadingRows rows={5} />;
+  if (scanner.error) return <ErrorState message={scanner.error} onRetry={scanner.reload} />;
+  if (!scanner.data?.data_available) return <NotAvailable reason={scanner.data?.reason} />;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+          Scanned {scanner.data.scanned} default-watchlist symbols, {scanner.data.resolved} resolved — favorable setups first.
+        </p>
+        <button className="btn-ghost text-xs" onClick={scanner.reload}>Rescan</button>
+      </div>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Sector</th><th>LTP</th><th>Signal</th><th>RSI</th><th>Trend</th>
+              <th>Entry zone</th><th>Stop</th><th>Target</th><th>R:R</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(scanner.data.rows as USScannerRow[]).map((r) => (
+              <tr key={r.symbol}>
+                <td className="font-semibold">{r.symbol}</td>
+                <td className="text-xs" style={{ color: "var(--text-muted)" }}>{r.sector}</td>
+                <td className="tabular-nums">{fmtUSD(r.ltp)}</td>
+                <td>{r.is_holding ? <span className="badge badge-info">{r.holding_action}</span> : <EntryBadge entry={r.entry} />}</td>
+                <td className="tabular-nums text-xs">{r.rsi?.toFixed(1) ?? "—"}</td>
+                <td className="text-xs">{r.trend || "—"}</td>
+                <td className="tabular-nums text-xs">{r.entry_zone ? `${fmtUSD(r.entry_zone[0])}–${fmtUSD(r.entry_zone[1])}` : "—"}</td>
+                <td className="tabular-nums text-xs text-bearish">{fmtUSD(r.stop_loss)}</td>
+                <td className="tabular-nums text-xs text-bullish">{fmtUSD(r.target_1)}</td>
+                <td className="tabular-nums text-xs">{r.risk_reward ? `1:${r.risk_reward}` : "—"}</td>
+                <td>
+                  <div className="flex gap-1">
+                    <button className="btn-ghost text-xs" style={{ color: "var(--color-bullish)", padding: "4px 6px" }} onClick={() => onBuySell(r.symbol, "BUY", r.ltp)} title={`Paper buy ${r.symbol}`}>
+                      <TrendingUp size={12} />
+                    </button>
+                    <button className="btn-ghost text-xs" style={{ color: "var(--color-bearish)", padding: "4px 6px" }} onClick={() => onBuySell(r.symbol, "SELL", r.ltp)} title={`Paper sell ${r.symbol}`}>
+                      <TrendingDown size={12} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function USStockView() {
   const { usSymbol, setUsSymbol } = useAppStore();
   const [symbol, setSymbol] = useState("");
-  const [order, setOrder] = useState<{ side: "BUY" | "SELL" } | null>(null);
+  const [order, setOrder] = useState<{ symbol: string; side: "BUY" | "SELL"; price: number | null } | null>(null);
+  const [fxRate, setFxRate] = useState<number | null>(null);
+
+  useEffect(() => {
+    usMarketAPI.fxRate().then((res) => setFxRate(res.data.rate)).catch(() => setFxRate(null));
+  }, []);
 
   // Picked up when the global top-bar search (or anywhere else) hands off a
   // symbol via the shared store — consumed once, then cleared, same pattern
@@ -327,19 +414,29 @@ export default function USStockView() {
         />
       </div>
 
-      {/* Search — scoped to the approved US universe, never Upstox/NSE */}
+      {/* Search — any US ticker, not restricted to a fixed list (Alpaca/SEC
+          resolve it; an invalid symbol just comes back "not available") */}
       <Card accent={US_ACCENT}>
         <SearchBox
           market="US"
           className="w-full md:max-w-md"
-          placeholder="Search approved US stocks (e.g. AAPL)…"
+          placeholder="Enter any US ticker (e.g. AAPL, NFLX, DIS)…"
           onSelect={setSymbol}
         />
+        <p className="text-[11px] mt-2" style={{ color: "var(--text-muted)" }}>
+          Any valid NYSE/NASDAQ ticker works — type one and press Enter even if it's not in the suggestions below.
+        </p>
       </Card>
 
-      {/* Universe browser */}
+      {/* US Scanner — technical scan across the default watchlist, favorable setups first */}
       <Card accent={US_ACCENT}>
-        <SectionHeader title="Approved US Stocks" subtitle="Or browse by sector" />
+        <SectionHeader icon={<Search size={16} />} title="US Scanner" subtitle="Finds favorable setups across the default watchlist — Buy/Sell opens a pre-filled paper order for you to confirm, nothing executes on its own" />
+        <ScannerPanel onBuySell={(sym, side, price) => setOrder({ symbol: sym, side, price })} />
+      </Card>
+
+      {/* Popular picks / scanner's default watchlist */}
+      <Card accent={US_ACCENT}>
+        <SectionHeader title="Popular US Stocks" subtitle="Quick picks — also the Scanner's default watchlist. Search above for any other ticker." />
         {universe.loading ? (
           <LoadingRows rows={3} />
         ) : universe.error ? (
@@ -362,7 +459,7 @@ export default function USStockView() {
 
       {!symbol && (
         <Card>
-          <EmptyState icon={<DollarSign size={28} />} title="No stock selected" description="Pick a symbol above to see its report, paper trading desk and AI research notes." />
+          <EmptyState icon={<DollarSign size={28} />} title="No stock selected" description="Search any US ticker above, pick a popular one, or act on a Scanner result." />
         </Card>
       )}
 
@@ -544,10 +641,10 @@ export default function USStockView() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <SectionHeader title={`Paper Trading Desk — ${symbol}`} subtitle="Simulated only — no real brokerage call" />
               <div className="flex gap-2">
-                <button className="btn-primary text-xs" style={{ background: "var(--color-bullish)" }} onClick={() => setOrder({ side: "BUY" })}>
+                <button className="btn-primary text-xs" style={{ background: "var(--color-bullish)" }} onClick={() => setOrder({ symbol, side: "BUY", price: q?.data_available ? q.ltp ?? null : null })}>
                   <TrendingUp size={13} /> Paper Buy
                 </button>
-                <button className="btn-secondary text-xs" style={{ color: "var(--color-bearish)" }} onClick={() => setOrder({ side: "SELL" })}>
+                <button className="btn-secondary text-xs" style={{ color: "var(--color-bearish)" }} onClick={() => setOrder({ symbol, side: "SELL", price: q?.data_available ? q.ltp ?? null : null })}>
                   <TrendingDown size={13} /> Paper Sell
                 </button>
               </div>
@@ -558,7 +655,7 @@ export default function USStockView() {
               {positions.loading ? <LoadingRows rows={2} /> : positions.error ? (
                 <ErrorState message={positions.error} onRetry={positions.reload} />
               ) : (
-                <PositionsTable positions={(positions.data?.positions || []).filter((p) => p.symbol === symbol)} />
+                <PositionsTable positions={(positions.data?.positions || []).filter((p) => p.symbol === symbol)} fxRate={fxRate} />
               )}
             </div>
 
@@ -577,7 +674,7 @@ export default function USStockView() {
             {trades.loading ? <LoadingRows rows={3} /> : trades.error ? (
               <ErrorState message={trades.error} onRetry={trades.reload} />
             ) : (
-              <TradesTable trades={trades.data?.trades || []} />
+              <TradesTable trades={trades.data?.trades || []} fxRate={fxRate} />
             )}
           </Card>
         </>
@@ -589,11 +686,18 @@ export default function USStockView() {
       ) : summary.error ? (
         <ErrorState message={summary.error} onRetry={summary.reload} />
       ) : summary.data ? (
-        <TaxSummaryStrip summary={summary.data} />
+        <TaxSummaryStrip summary={summary.data} fxRate={fxRate} />
       ) : null}
 
-      {order && symbol && (
-        <PaperOrderDialog open={!!order} onClose={() => setOrder(null)} symbol={symbol} side={order.side} onPlaced={afterOrderPlaced} />
+      {order && (
+        <PaperOrderDialog
+          open={!!order}
+          onClose={() => setOrder(null)}
+          symbol={order.symbol}
+          side={order.side}
+          defaultPrice={order.price}
+          onPlaced={afterOrderPlaced}
+        />
       )}
     </div>
   );

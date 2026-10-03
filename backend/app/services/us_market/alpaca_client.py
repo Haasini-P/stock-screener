@@ -47,6 +47,15 @@ class AlpacaClient:
         """Latest trade, latest quote, today's and yesterday's daily bar in one call."""
         return await self._request(f"/v2/stocks/{symbol}/snapshot", {"feed": "iex"})
 
+    async def get_snapshots(self, symbols: list[str]) -> dict[str, dict]:
+        """Same shape as get_snapshot, for multiple symbols in one call — confirmed
+        live this returns {SYMBOL: {dailyBar, prevDailyBar, latestTrade, latestQuote,
+        minuteBar}, ...}. Used for movers (ranking a whole universe by change%)
+        instead of one request per symbol."""
+        if not symbols:
+            return {}
+        return await self._request("/v2/stocks/snapshots", {"symbols": ",".join(symbols), "feed": "iex"})
+
     async def get_daily_bars(self, symbol: str, start: str, end: str) -> list[dict]:
         """Daily OHLCV bars between start/end (YYYY-MM-DD). Each bar:
         {t, o, h, l, c, v, n, vw}. Adjusted for splits, not dividends, matching

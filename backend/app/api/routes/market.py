@@ -18,6 +18,7 @@ from app.api.dependencies import get_optional_user
 from app.config import get_settings
 from app.database import get_db
 from app.models.user import User
+from app.services.analytics.india_indices import get_india_indices_history, get_india_indices_latest
 from app.services.analytics.market_state import get_market_state
 from app.services.analytics.screener import SECTOR_UNIVERSE, MarketScreener, sector_summary
 from app.services.broker_config import get_credentials as get_broker_credentials
@@ -598,3 +599,21 @@ async def search_instruments(
             if i.get("segment") == "NSE_EQ" or exchange != "NSE"
         ]
     }
+
+
+@router.get("/market/indices/latest")
+async def india_indices_latest(user: Optional[User] = Depends(get_optional_user), db: AsyncSession = Depends(get_db)):
+    """NIFTY 50 / SENSEX / NIFTY BANK for the Dashboard ticker strip — separate
+    from market_state.py's regime pipeline (SENSEX isn't in its INDEX_KEYS)."""
+    provider = await get_market_provider(user, db)
+    return await get_india_indices_latest(provider)
+
+
+@router.get("/market/indices/history")
+async def india_indices_history(
+    range: str = Query(default="1M"), user: Optional[User] = Depends(get_optional_user), db: AsyncSession = Depends(get_db),
+):
+    """Daily-bar history for the same three, normalized to % change from the
+    first point in range — for the Dashboard Market Overview chart."""
+    provider = await get_market_provider(user, db)
+    return await get_india_indices_history(provider, range)

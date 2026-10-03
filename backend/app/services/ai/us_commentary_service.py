@@ -187,3 +187,23 @@ async def generate_us_research(db: AsyncSession, user: Optional[User], symbol: s
         "content": text, "model": settings["model"], "cached": False,
         "data_backed": family == "real", "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def list_recent_research(db: AsyncSession, limit: int = 5) -> list[dict]:
+    """Most recently generated US research notes, one row per distinct symbol
+    (a symbol re-generated multiple times only counts once, at its latest
+    timestamp) — for the Dashboard's "Recent US Analysis" panel."""
+    result = await db.execute(
+        select(USCommentaryCache).order_by(USCommentaryCache.created_at.desc()).limit(limit * 4)
+    )
+    rows = result.scalars().all()
+    seen: set[str] = set()
+    recent = []
+    for row in rows:
+        if row.symbol in seen:
+            continue
+        seen.add(row.symbol)
+        recent.append({"symbol": row.symbol, "model": row.model_used, "generated_at": row.created_at.isoformat()})
+        if len(recent) >= limit:
+            break
+    return recent

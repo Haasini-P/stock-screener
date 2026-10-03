@@ -18,6 +18,7 @@ from app.models.user import User
 from app.services.ai.ai_config import AIConfigError, PROVIDERS, get_settings_public, set_active_model, set_provider_key
 from app.services.ai.commentary_service import (
     CommentaryError, MAX_BATCH_SYMBOLS, MODEL_PRICING, generate_batch_commentary, generate_commentary,
+    list_recent_commentary,
 )
 
 router = APIRouter(tags=["AI Commentary"])
@@ -68,6 +69,13 @@ async def update_ai_provider_key(
     if provider not in PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unknown provider '{provider}'. Must be one of {PROVIDERS}.")
     return await set_provider_key(db, provider, body.api_key, user.email)
+
+
+@router.get("/api/ai/commentary/recent")
+async def get_recent_commentary(limit: int = 5, db: AsyncSession = Depends(get_db)):
+    """Most recently generated Indian AI commentary, one per distinct symbol —
+    for the Dashboard's "Recent Indian Analysis" panel."""
+    return {"items": await list_recent_commentary(db, min(max(limit, 1), 20))}
 
 
 @router.post("/api/ai/commentary/batch")

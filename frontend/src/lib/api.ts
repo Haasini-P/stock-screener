@@ -104,6 +104,8 @@ export const marketAPI = {
   sectors: () => api.get("/api/market/sectors"),
   movers: (limit = 5) => api.get("/api/market/movers", { params: { limit } }),
   news: (sector?: string) => api.get("/api/market/news", { params: { sector } }),
+  indicesLatest: () => api.get("/api/market/indices/latest"),
+  indicesHistory: (range: string) => api.get("/api/market/indices/history", { params: { range } }),
 
   quote: (symbol: string) => api.get(`/api/stocks/${encodeURIComponent(symbol)}/quote`),
 
@@ -338,6 +340,7 @@ export const MAX_BATCH_SYMBOLS = 8;
 export const aiAPI = {
   getCommentary: (symbol: string) => api.post<AICommentaryResult>(`/api/ai/commentary/${encodeURIComponent(symbol)}`),
   getBatchCommentary: (symbols: string[]) => api.post<AIBatchCommentaryResult>("/api/ai/commentary/batch", { symbols }),
+  recentCommentary: (limit = 5) => api.get<{ items: { symbol: string; model: string; generated_at: string }[] }>("/api/ai/commentary/recent", { params: { limit } }),
 };
 
 // ============================================================
@@ -445,6 +448,32 @@ export interface USResearchResult {
   generated_at: string;
 }
 
+export interface USScannerRow {
+  symbol: string;
+  sector: string;
+  ltp: number | null;
+  entry: string | null;
+  favorable: boolean;
+  is_holding: boolean;
+  holding_action: string | null;
+  rsi: number | null;
+  adx: number | null;
+  trend: string | null;
+  volume_ratio: number | null;
+  entry_zone: [number, number] | null;
+  stop_loss: number | null;
+  target_1: number | null;
+  target_2: number | null;
+  risk_reward: number | null;
+}
+
+export interface FxRate {
+  rate: number | null;
+  as_of?: string;
+  source?: string;
+  error?: string;
+}
+
 export const usMarketAPI = {
   universe: () => api.get<{ universe: Record<string, string[]> }>("/api/us/universe"),
   quote: (symbol: string) => api.get<USQuote>(`/api/us/stocks/${encodeURIComponent(symbol)}/quote`),
@@ -454,6 +483,12 @@ export const usMarketAPI = {
   news: (symbol: string) => api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/news`),
   analyze: (symbol: string) => api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/analyze`),
   research: (symbol: string) => api.get<USResearchResult>(`/api/us/stocks/${encodeURIComponent(symbol)}/research`),
+  scanner: () => api.get<{ data_available: boolean; rows: USScannerRow[]; scanned: number; resolved: number; reason?: string }>("/api/us/scanner"),
+  fxRate: () => api.get<FxRate>("/api/us/fx-rate"),
+  movers: () => api.get("/api/us/movers"),
+  indicesLatest: () => api.get("/api/us/indices/latest"),
+  indicesHistory: (range: string) => api.get("/api/us/indices/history", { params: { range } }),
+  recentResearch: (limit = 5) => api.get<{ items: { symbol: string; model: string; generated_at: string }[] }>("/api/us/research/recent", { params: { limit } }),
 };
 
 // Client-side search over the small approved US universe — used by SearchBox's
