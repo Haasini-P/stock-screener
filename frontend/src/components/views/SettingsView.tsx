@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Bell, Brain, Copy, Database, KeyRound, Landmark, LogOut, Plus, RotateCw, Save, Server, ShieldCheck, SlidersHorizontal, Sparkles, Star, Trash2, User } from "lucide-react";
 import {
-  accountsAPI, aiSettingsAPI, AIProvider, AISettingsStatus, API_BASE_URL, BrokerAccount, BrokerCredentialStatus, brokerSettingsAPI,
+  accountsAPI, aiSettingsAPI, AIProvider, AISettingsStatus, AlpacaStatus, API_BASE_URL, BrokerAccount, BrokerCredentialStatus, brokerSettingsAPI,
   DevService, errorMessage, healthAPI, mlAPI, ModelVersionSummary, systemAPI,
 } from "@/lib/api";
 import { DEFAULT_SETTINGS, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtINR, fmtNum, timeAgo } from "@/lib/format";
-import { Card, EmptyState, ErrorState, KeyValue, LoadingRows, PageHeader, SectionHeader } from "../ui";
+import { Card, EmptyState, ErrorState, KeyValue, LoadingRows, PageHeader, SectionHeader, Skeleton } from "../ui";
 
 const TOKEN_STATUS: Record<string, { label: string; cls: string; help: string }> = {
   valid: { label: "Valid", cls: "badge-bullish", help: "Market data is flowing from Upstox." },
@@ -395,11 +395,24 @@ function BrokerCredentialForm({
   );
 }
 
+const ALPACA_STATUS_DISPLAY: Record<AlpacaStatus["status"], { label: string; cls: string }> = {
+  connected: { label: "Connected", cls: "badge-bullish" },
+  invalid: { label: "Invalid", cls: "badge-bearish" },
+  not_configured: { label: "Not connected", cls: "badge-neutral" },
+};
+
 function AlpacaCredentialForm({ current, onSaved }: { current: BrokerCredentialStatus; onSaved: () => void }) {
   const { toast } = useAppStore();
   const [clientId, setClientId] = useState(current.client_id);
   const [clientSecret, setClientSecret] = useState("");
   const [saving, setSaving] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [editing, setEditing] = useState(!current.configured);
+
+  // Live connectivity check (a real, free Alpaca call), not just "is a key saved" —
+  // see GET /api/settings/brokers/alpaca/status.
+  const status = useApi(() => brokerSettingsAPI.alpacaStatus(), [current.client_id, current.has_secret]);
+  const display = status.data ? ALPACA_STATUS_DISPLAY[status.data.status] : null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -407,7 +420,9 @@ function AlpacaCredentialForm({ current, onSaved }: { current: BrokerCredentialS
     setSaving(true);
     try {
       await brokerSettingsAPI.updateAlpaca({ client_id: clientId.trim(), client_secret: clientSecret || undefined });
-      toast("Alpaca credentials saved", "success");
+      toast("Alpaca connected", "success");
+      setClientSecret("");
+      setEditing(false);
       onSaved();
     } catch (err) {
       toast(errorMessage(err, "Could not save Alpaca credentials."), "error");
@@ -416,13 +431,34 @@ function AlpacaCredentialForm({ current, onSaved }: { current: BrokerCredentialS
     }
   };
 
+  const disconnect = async () => {
+    if (!window.confirm("Disconnect Alpaca? The US Stocks page will lose live quotes/charts/news until you reconnect.")) return;
+    setDisconnecting(true);
+    try {
+      await brokerSettingsAPI.disconnectAlpaca();
+      toast("Alpaca disconnected", "info");
+      setClientId("");
+      setClientSecret("");
+      setEditing(true);
+      onSaved();
+    } catch (err) {
+      toast(errorMessage(err, "Could not disconnect Alpaca."), "error");
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
   return (
-    <form onSubmit={submit} className="space-y-3 p-3 rounded-lg" style={{ border: "1px solid var(--border-subtle)" }}>
+    <div className="space-y-3 p-3 rounded-lg" style={{ border: "1px solid var(--border-subtle)" }}>
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Alpaca (US stocks)</span>
-        <span className={`badge ${current.configured ? "badge-bullish" : "badge-neutral"}`}>
-          {current.configured ? "Configured" : "Not configured"}
-        </span>
+        {status.loading ? (
+          <Skeleton className="h-5 w-20" />
+        ) : (
+          <span className={`badge ${display?.cls || "badge-neutral"}`} title={status.data?.detail}>
+            {display?.label || "Unknown"}
+          </span>
+        )}
       </div>
       <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
         Powers real US quotes, charts and news on the US Stocks page (~15-min delayed, free tier). No OAuth —
@@ -431,25 +467,49 @@ function AlpacaCredentialForm({ current, onSaved }: { current: BrokerCredentialS
           app.alpaca.markets/signup
         </a>
       </p>
-      <div>
-        <label className="field-label">API Key ID</label>
-        <input className="input text-xs" value={clientId} onChange={(e) => setClientId(e.target.value)} />
-      </div>
-      <div>
-        <label className="field-label">Secret Key</label>
-        <input
-          className="input text-xs"
-          type="password"
-          value={clientSecret}
-          onChange={(e) => setClientSecret(e.target.value)}
-          placeholder={current.has_secret ? "•••••••• (unchanged)" : "Not set"}
-          autoComplete="new-password"
-        />
-      </div>
-      <button type="submit" className="btn-primary text-xs" disabled={saving}>
-        <Save size={13} /> {saving ? "Saving…" : "Save"}
-      </button>
-    </form>
+
+      {status.data?.status === "invalid" && status.data.detail && (
+        <p className="text-[10px]" style={{ color: "var(--color-bearish)" }}>{status.data.detail}</p>
+      )}
+
+      {!editing && current.configured ? (
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>{current.client_id}</span>
+          <div className="flex gap-2">
+            <button type="button" className="btn-ghost text-xs" onClick={() => setEditing(true)}>Change key</button>
+            <button type="button" className="btn-secondary text-xs" style={{ color: "var(--color-bearish)" }} onClick={disconnect} disabled={disconnecting}>
+              <Trash2 size={13} /> {disconnecting ? "Disconnecting…" : "Disconnect"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="field-label">API Key ID</label>
+            <input className="input text-xs" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+          </div>
+          <div>
+            <label className="field-label">Secret Key</label>
+            <input
+              className="input text-xs"
+              type="password"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder={current.has_secret ? "•••••••• (unchanged)" : "Not set"}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" className="btn-primary text-xs" disabled={saving}>
+              <Save size={13} /> {saving ? "Connecting…" : "Connect"}
+            </button>
+            {current.configured && (
+              <button type="button" className="btn-ghost text-xs" onClick={() => setEditing(false)}>Cancel</button>
+            )}
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 

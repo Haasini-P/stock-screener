@@ -281,11 +281,18 @@ export interface AlpacaCredentialUpdate {
   client_secret?: string;
 }
 
+export interface AlpacaStatus {
+  status: "connected" | "invalid" | "not_configured";
+  detail?: string;
+}
+
 export const brokerSettingsAPI = {
   get: () => api.get<{ upstox: BrokerCredentialStatus; kite: BrokerCredentialStatus; alpaca: BrokerCredentialStatus }>("/api/settings/brokers"),
   updateUpstox: (payload: BrokerCredentialUpdate) => api.put("/api/settings/brokers/upstox", payload),
   updateKite: (payload: BrokerCredentialUpdate) => api.put("/api/settings/brokers/kite", payload),
   updateAlpaca: (payload: AlpacaCredentialUpdate) => api.put("/api/settings/brokers/alpaca", payload),
+  disconnectAlpaca: () => api.delete("/api/settings/brokers/alpaca"),
+  alpacaStatus: () => api.get<AlpacaStatus>("/api/settings/brokers/alpaca/status"),
 };
 
 export interface ModelPricing {
@@ -448,6 +455,31 @@ export const usMarketAPI = {
   analyze: (symbol: string) => api.get(`/api/us/stocks/${encodeURIComponent(symbol)}/analyze`),
   research: (symbol: string) => api.get<USResearchResult>(`/api/us/stocks/${encodeURIComponent(symbol)}/research`),
 };
+
+// Client-side search over the small approved US universe — used by SearchBox's
+// market="US" mode so searching for a US ticker never touches Upstox/NSE.
+// Cached in-module after the first call since the list rarely changes.
+let _usUniverseFlatCache: { symbol: string; sector: string }[] | null = null;
+
+async function getUSUniverseFlat(): Promise<{ symbol: string; sector: string }[]> {
+  if (_usUniverseFlatCache) return _usUniverseFlatCache;
+  const res = await usMarketAPI.universe();
+  const flat: { symbol: string; sector: string }[] = [];
+  for (const [sector, symbols] of Object.entries(res.data.universe)) {
+    for (const symbol of symbols) flat.push({ symbol, sector });
+  }
+  _usUniverseFlatCache = flat;
+  return flat;
+}
+
+export async function searchUSUniverse(query: string): Promise<{ symbol: string; name: string; short_name?: string }[]> {
+  const list = await getUSUniverseFlat();
+  const q = query.trim().toUpperCase();
+  if (!q) return [];
+  return list
+    .filter((x) => x.symbol.includes(q) || x.sector.toUpperCase().includes(q))
+    .map((x) => ({ symbol: x.symbol, name: x.symbol, short_name: x.sector }));
+}
 
 export interface PaperOrder {
   id: string;

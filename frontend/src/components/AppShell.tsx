@@ -323,10 +323,11 @@ function UserMenu() {
 }
 
 function TopBar({ marketOpen }: { marketOpen: boolean | null }) {
-  const { sidebarOpen, setSidebarOpen } = useAppStore();
+  const { sidebarOpen, setSidebarOpen, activeTab, setUsSymbol } = useAppStore();
   const [time, setTime] = useState("");
   const router = useRouter();
   const searchRef = useRef<SearchBoxHandle>(null);
+  const onUSStocksTab = activeTab === "us_stocks";
 
   useEffect(() => {
     const update = () =>
@@ -365,8 +366,9 @@ function TopBar({ marketOpen }: { marketOpen: boolean | null }) {
           ref={searchRef}
           className="w-full max-w-[360px]"
           shortcutHint
-          placeholder="Search stocks by name or symbol…"
-          onSelect={(s) => router.push(`/stock/${encodeURIComponent(s)}`)}
+          market={onUSStocksTab ? "US" : "IN"}
+          placeholder={onUSStocksTab ? "Search approved US stocks…" : "Search stocks by name or symbol…"}
+          onSelect={(s) => (onUSStocksTab ? setUsSymbol(s) : router.push(`/stock/${encodeURIComponent(s)}`))}
         />
       </div>
 

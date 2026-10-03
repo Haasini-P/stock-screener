@@ -95,6 +95,7 @@ interface AppState {
   activeTab: Tab;
   selectedSector: string | null;
   reportSymbol: string | null;
+  usSymbol: string | null;
 
   // Feedback
   toasts: Toast[];
@@ -109,6 +110,7 @@ interface AppState {
   setActiveTab: (tab: Tab) => void;
   setSelectedSector: (sector: string | null) => void;
   setReportSymbol: (symbol: string | null) => void;
+  setUsSymbol: (symbol: string | null) => void;
   toast: (message: string, kind?: Toast["kind"]) => void;
   dismissToast: (id: number) => void;
   setNotifications: (items: AppNotification[]) => void;
@@ -131,6 +133,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeTab: "dashboard",
   selectedSector: null,
   reportSymbol: null,
+  usSymbol: null,
 
   toasts: [],
   notifications: [],
@@ -164,6 +167,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
   setSelectedSector: (sector) => set({ selectedSector: sector }),
   setReportSymbol: (symbol) => set({ reportSymbol: symbol }),
+  setUsSymbol: (symbol) => set({ usSymbol: symbol }),
 
   toast: (message, kind = "info") => {
     const id = ++toastId;

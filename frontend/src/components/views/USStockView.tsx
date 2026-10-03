@@ -21,7 +21,7 @@
  * paper trading never needed a live quote to begin with).
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle, BarChart3, DollarSign, Newspaper, Receipt, Sparkles, Target, TrendingDown, TrendingUp,
 } from "lucide-react";
@@ -29,11 +29,13 @@ import {
   PaperOrder, PaperPosition, PaperTaxSummary, PaperTrade, USResearchResult,
   errorMessage, paperTradingAPI, usMarketAPI,
 } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
 import { fmtDate, fmtPct, fmtUSD, timeAgo } from "@/lib/format";
 import CandlestickChart from "../CandlestickChart";
 import PaperOrderDialog from "../PaperOrderDialog";
 import MarkdownContent from "../MarkdownContent";
+import SearchBox from "../SearchBox";
 import { Card, EmptyState, EntryBadge, ErrorState, KeyValue, LoadingRows, PageHeader, SectionHeader } from "../ui";
 
 const US_ACCENT = "#2563eb"; // this page's own accent — not a shared/global CSS variable
@@ -276,8 +278,20 @@ function NotAvailable({ reason }: { reason?: string }) {
 }
 
 export default function USStockView() {
+  const { usSymbol, setUsSymbol } = useAppStore();
   const [symbol, setSymbol] = useState("");
   const [order, setOrder] = useState<{ side: "BUY" | "SELL" } | null>(null);
+
+  // Picked up when the global top-bar search (or anywhere else) hands off a
+  // symbol via the shared store — consumed once, then cleared, same pattern
+  // as ReportView.tsx's reportSymbol.
+  useEffect(() => {
+    if (usSymbol) {
+      setSymbol(usSymbol);
+      setUsSymbol(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usSymbol]);
 
   const universe = useApi(() => usMarketAPI.universe(), []);
   const analysis = useApi(() => usMarketAPI.analyze(symbol), [symbol], { enabled: !!symbol });
@@ -313,9 +327,19 @@ export default function USStockView() {
         />
       </div>
 
+      {/* Search — scoped to the approved US universe, never Upstox/NSE */}
+      <Card accent={US_ACCENT}>
+        <SearchBox
+          market="US"
+          className="w-full md:max-w-md"
+          placeholder="Search approved US stocks (e.g. AAPL)…"
+          onSelect={setSymbol}
+        />
+      </Card>
+
       {/* Universe browser */}
       <Card accent={US_ACCENT}>
-        <SectionHeader title="Approved US Stocks" subtitle="No live instrument search yet — pick from this list" />
+        <SectionHeader title="Approved US Stocks" subtitle="Or browse by sector" />
         {universe.loading ? (
           <LoadingRows rows={3} />
         ) : universe.error ? (

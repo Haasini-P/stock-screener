@@ -45,20 +45,35 @@ class AlpacaClient:
 
     async def get_snapshot(self, symbol: str) -> dict:
         """Latest trade, latest quote, today's and yesterday's daily bar in one call."""
-        return await self._request(f"/v2/stocks/{symbol}/snapshot", {})
+        return await self._request(f"/v2/stocks/{symbol}/snapshot", {"feed": "iex"})
 
     async def get_daily_bars(self, symbol: str, start: str, end: str) -> list[dict]:
         """Daily OHLCV bars between start/end (YYYY-MM-DD). Each bar:
         {t, o, h, l, c, v, n, vw}. Adjusted for splits, not dividends, matching
-        how most retail charting tools present price history by default."""
+        how most retail charting tools present price history by default.
+
+        feed="iex" is mandatory here, not just a sane default like on the
+        snapshot endpoint: confirmed live against a real free-tier account
+        that /v2/stocks/bars silently defaults to the premium "sip" feed and
+        gets rejected with 403 "subscription does not permit querying recent
+        SIP data" if this isn't passed explicitly."""
         data = await self._request("/v2/stocks/bars", {
             "symbols": symbol, "timeframe": "1Day", "start": start, "end": end,
-            "limit": 10000, "adjustment": "split",
+            "limit": 10000, "adjustment": "split", "feed": "iex",
         })
         return (data.get("bars") or {}).get(symbol, [])
 
     async def get_news(self, symbol: str, limit: int = 10) -> list[dict]:
         """Recent news for a symbol (Benzinga-sourced). Each item:
-        {headline, created_at, summary, url, source}."""
+        {headline, created_at, summary, url, source}. No "feed" param here —
+        confirmed live that the news endpoint rejects it outright (400
+        "unexpected query parameter(s): feed"), unlike snapshot/bars which
+        need it for free-tier entitlement."""
         data = await self._request("/v1beta1/news", {"symbols": symbol, "limit": min(limit, 50)})
         return data.get("news") or []
+
+    async def test_connection(self) -> None:
+        """Cheapest real call that proves the key/secret actually work — a
+        snapshot for a well-known symbol. Raises AlpacaAPIError on failure
+        (401/403/network error); returns nothing on success."""
+        await self.get_snapshot("AAPL")

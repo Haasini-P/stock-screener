@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.services.broker_config import get_credentials_public, set_credentials
+from app.services.broker_config import clear_credentials, get_credentials, get_credentials_public, set_credentials
+from app.services.us_market.alpaca_client import AlpacaAPIError, AlpacaClient
 
 router = APIRouter(prefix="/api/settings/brokers", tags=["Broker Settings"])
 
@@ -69,3 +70,24 @@ async def update_alpaca_settings(
     """Save Alpaca's API Key ID / Secret Key (free tier, no KYC — app.alpaca.markets/signup).
     Powers real US stock quotes/candles/news on the US Stocks page."""
     return await set_credentials(db, "alpaca", body.client_id, body.client_secret, "", user.email)
+
+
+@router.delete("/alpaca")
+async def disconnect_alpaca(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Disconnect — clears the stored key/secret. The US Stocks page falls
+    back to its honest "not configured" state for quotes/candles/news."""
+    return await clear_credentials(db, "alpaca", user.email)
+
+
+@router.get("/alpaca/status")
+async def alpaca_status(db: AsyncSession = Depends(get_db)):
+    """Live connection status — not just "is something saved" but "does Alpaca
+    actually accept it", via one real (free) API call."""
+    creds = await get_credentials(db, "alpaca")
+    if not creds["configured"]:
+        return {"status": "not_configured"}
+    try:
+        await AlpacaClient(creds["client_id"], creds["client_secret"]).test_connection()
+    except AlpacaAPIError as e:
+        return {"status": "invalid", "detail": str(e)}
+    return {"status": "connected"}

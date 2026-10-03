@@ -6,7 +6,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { marketAPI } from "@/lib/api";
+import { marketAPI, searchUSUniverse } from "@/lib/api";
 
 export interface Suggestion {
   symbol: string;
@@ -21,6 +21,9 @@ interface Props {
   shortcutHint?: boolean;
   autoFocus?: boolean;
   className?: string;
+  /** "US" searches StockMind's small approved US ticker list (client-side,
+   * no Upstox/NSE call) instead of the default Upstox/NSE instrument search. */
+  market?: "IN" | "US";
 }
 
 export interface SearchBoxHandle {
@@ -28,7 +31,7 @@ export interface SearchBoxHandle {
 }
 
 const SearchBox = forwardRef<SearchBoxHandle, Props>(function SearchBox(
-  { onSelect, placeholder = "Search NSE stocks…", shortcutHint = false, autoFocus = false, className = "" },
+  { onSelect, placeholder = "Search NSE stocks…", shortcutHint = false, autoFocus = false, className = "", market = "IN" },
   ref
 ) {
   const [query, setQuery] = useState("");
@@ -51,9 +54,9 @@ const SearchBox = forwardRef<SearchBoxHandle, Props>(function SearchBox(
     let cancelled = false;
     setLoading(true);
     const timer = setTimeout(() => {
-      marketAPI
-        .searchInstruments(q)
-        .then((res) => !cancelled && setResults(res.data?.results || []))
+      const search = market === "US" ? searchUSUniverse(q) : marketAPI.searchInstruments(q).then((res) => res.data?.results || []);
+      search
+        .then((results) => !cancelled && setResults(results))
         .catch(() => !cancelled && setResults([]))
         .finally(() => !cancelled && setLoading(false));
     }, 250);
@@ -61,7 +64,7 @@ const SearchBox = forwardRef<SearchBoxHandle, Props>(function SearchBox(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, market]);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {

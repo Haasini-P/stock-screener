@@ -99,3 +99,21 @@ async def set_credentials(
 
     await db.commit()
     return await get_credentials_public(db, provider)
+
+
+async def clear_credentials(db: AsyncSession, provider: str, updated_by: str) -> dict:
+    """
+    Disconnect: blanks the stored client_id/secret for a provider (does not
+    delete the row, so updated_by/updated_at stay as an audit trail). If an
+    env var default still exists for this provider, get_credentials falls
+    back to it afterward — "disconnected" means "no database override", not
+    necessarily "nothing configured at all".
+    """
+    row = await _get_row(db, provider)
+    if row is not None:
+        row.client_id = ""
+        row.client_secret_encrypted = None
+        row.redirect_uri = ""
+        row.updated_by = updated_by
+        await db.commit()
+    return await get_credentials_public(db, provider)
