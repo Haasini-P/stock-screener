@@ -500,8 +500,8 @@ export default function ReportView() {
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>No recent news for this stock.</p>
             ) : (
               <ul className="space-y-2">
-                {newsItems.slice(0, 8).map((n: any) => (
-                  <li key={n.url || n.heading} className="text-xs">
+                {newsItems.slice(0, 8).map((n: any, i: number) => (
+                  <li key={`${n.url || n.heading || "news"}-${i}`} className="text-xs">
                     <a href={n.url} target="_blank" rel="noopener noreferrer" className="font-semibold hover:underline" style={{ color: "var(--text-primary)" }}>{n.heading}</a>
                     <span style={{ color: "var(--text-muted)" }}> · {timeAgo(n.published_at)}</span>
                   </li>

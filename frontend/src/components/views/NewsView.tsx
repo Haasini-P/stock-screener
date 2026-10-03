@@ -54,8 +54,8 @@ export default function NewsView() {
         <EmptyState icon={<Newspaper size={28} />} title="No news found" description={query ? "No headlines match your filter." : "Upstox returned no recent articles for this selection."} />
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {items.map((n) => (
-            <article key={n.url || n.heading} className="glass-card p-4 flex gap-4">
+          {items.map((n, i) => (
+            <article key={`${n.url || n.heading || "news"}-${i}`} className="glass-card p-4 flex gap-4">
               {n.thumbnail && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={n.thumbnail} alt="" className="w-24 h-20 object-cover rounded-lg shrink-0 hidden sm:block" loading="lazy" />

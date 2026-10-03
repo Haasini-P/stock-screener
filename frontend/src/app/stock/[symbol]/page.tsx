@@ -246,8 +246,8 @@ function NewsCard({ symbol }: { symbol: string }) {
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>No recent news for this stock.</p>
       ) : (
         <ul className="space-y-3">
-          {items.slice(0, 8).map((n) => (
-            <li key={n.url || n.heading}>
+          {items.slice(0, 8).map((n, i) => (
+            <li key={`${n.url || n.heading || "news"}-${i}`}>
               <a href={n.url} target="_blank" rel="noopener noreferrer" className="text-xs font-semibold hover:underline inline-flex gap-1" style={{ color: "var(--text-primary)" }}>
                 {n.heading} <ExternalLink size={11} className="shrink-0 mt-0.5" style={{ color: "var(--text-muted)" }} />
               </a>
