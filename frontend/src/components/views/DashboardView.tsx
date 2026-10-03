@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -9,21 +10,25 @@ import {
   DollarSign,
   FileSearch,
   Globe,
-  LineChart,
+  LineChart as LineChartIcon,
+  Newspaper,
+  Search,
   Shield,
   Sparkles,
+  Target,
   TrendingDown,
   TrendingUp,
   Wallet,
   Zap,
 } from "lucide-react";
-import { marketAPI, paperTradingAPI, signalsAPI, watchlistAPI } from "@/lib/api";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { aiAPI, marketAPI, paperTradingAPI, signalsAPI, usMarketAPI, watchlistAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtDate, fmtINR, fmtINRCompact, fmtNum, fmtPct, fmtTime, fmtUSD, tone, toneColor } from "@/lib/format";
+import { fmtDate, fmtINR, fmtNum, fmtPct, fmtTime, fmtUSD, timeAgo, toneColor } from "@/lib/format";
 import { useNavigateTab } from "../AppShell";
 import SearchBox from "../SearchBox";
-import { BucketChips, Card, Change, EmptyState, EntryBadge, ErrorState, Skeleton, StockLink } from "../ui";
+import { BucketChips, Card, Change, EmptyState, EntryBadge, ErrorState, InitialsBadge, LoadingRows, SectionHeader, Skeleton, StockLink } from "../ui";
 
 export const SECTOR_ICONS: Record<string, { icon: typeof Shield; color: string }> = {
   Defence: { icon: Shield, color: "#ef4444" },
@@ -31,11 +36,13 @@ export const SECTOR_ICONS: Record<string, { icon: typeof Shield; color: string }
   Semiconductor: { icon: Activity, color: "#6366f1" },
   "AI / Data Centre": { icon: Brain, color: "#22d3ee" },
   "Pharma / CDMO": { icon: Sparkles, color: "#22c55e" },
-  "Cables & Wires": { icon: LineChart, color: "#a855f7" },
+  "Cables & Wires": { icon: LineChartIcon, color: "#a855f7" },
   "EV / Electronics": { icon: BarChart3, color: "#ec4899" },
   Chemicals: { icon: Globe, color: "#14b8a6" },
 };
 
+// Still used by AnalyticsView.tsx/SignalsView.tsx even though this page no
+// longer shows a standalone regime banner (the ticker strip replaces it).
 export const regimeColor = (regime?: string) => {
   const r = (regime || "").toLowerCase();
   if (r.includes("risk-on") || r.includes("bull")) return "var(--color-bullish)";
@@ -43,72 +50,317 @@ export const regimeColor = (regime?: string) => {
   return "var(--color-neutral)";
 };
 
-function MetricCard({
-  title,
-  value,
-  change,
-  changeTone,
-  subtitle,
-  icon,
-  onClick,
-  loading,
-}: {
-  title: string;
-  value: string;
-  change?: string;
-  changeTone?: "bullish" | "bearish" | "neutral";
-  subtitle?: string;
-  icon: React.ReactNode;
-  onClick?: () => void;
-  loading?: boolean;
-}) {
-  const color =
-    changeTone === "bullish" ? "var(--color-bullish)" : changeTone === "bearish" ? "var(--color-bearish)" : "var(--color-neutral)";
+const US_ACCENT = "#2563eb"; // same accent used on the US Stocks page
+const INDIA_ACCENT = "#6366f1"; // this app's existing indigo accent
+const RANGES = ["1W", "1M", "3M", "1Y"] as const;
+
+const US_CHIPS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META"];
+const INDIA_CHIPS = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "TATASTEEL", "LT", "SBIN"];
+
+// ---------- Ticker strip ----------
+
+function Sparkline({ points, color }: { points: { t: string; value: number }[]; color: string }) {
+  if (!points.length) return <div className="w-16 h-8" />;
   return (
-    <button className="glass-card metric-card text-left w-full" onClick={onClick}>
-      <div className="flex items-start justify-between mb-3">
-        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>{title}</span>
-        <div className="p-1.5 rounded-md" style={{ background: "rgba(99, 102, 241, 0.1)" }}>{icon}</div>
-      </div>
-      {loading ? (
-        <Skeleton className="h-8 w-32" />
-      ) : (
-        <div className="text-2xl font-bold tracking-tight tabular-nums" style={{ color: "var(--text-primary)" }}>{value}</div>
-      )}
-      {change && !loading && (
-        <div className="flex items-center gap-1.5 mt-1.5">
-          {changeTone === "bullish" ? <TrendingUp size={14} className="text-bullish" /> : changeTone === "bearish" ? <TrendingDown size={14} className="text-bearish" /> : null}
-          <span className="text-sm font-semibold" style={{ color }}>{change}</span>
-        </div>
-      )}
-      {subtitle && <p className="text-xs mt-1 truncate" style={{ color: "var(--text-muted)" }}>{subtitle}</p>}
-    </button>
+    <div className="w-16 h-8">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={points}>
+          <Line type="monotone" dataKey="value" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
+function TickerStrip() {
+  const usLatest = useApi(() => usMarketAPI.indicesLatest(), [], { refreshMs: 60000 });
+  const usHistory = useApi(() => usMarketAPI.indicesHistory("1W"), []);
+  const inLatest = useApi(() => marketAPI.indicesLatest(), [], { refreshMs: 60000 });
+  const inHistory = useApi(() => marketAPI.indicesHistory("1W"), []);
+
+  const loading = usLatest.loading || inLatest.loading;
+  if (loading) return <Card><LoadingRows rows={1} /></Card>;
+
+  const usIndices: any[] = usLatest.data?.indices || [];
+  const usSeries: any[] = usHistory.data?.series || [];
+  const inIndices: any[] = inLatest.data?.indices || [];
+  const inSeries: any[] = inHistory.data?.series || [];
+
+  const row = (idx: any, points: { t: string; value: number }[], fmtPrice: (v: number) => string) => (
+    <div key={idx.name} className="flex items-center gap-2 shrink-0">
+      <div>
+        <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{idx.name}</p>
+        <p className="text-sm font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{fmtPrice(idx.price)}</p>
+        {idx.change_pct != null && (
+          <p className={`text-[11px] font-semibold ${idx.change_pct >= 0 ? "text-bullish" : "text-bearish"}`}>{fmtPct(idx.change_pct)}</p>
+        )}
+      </div>
+      <Sparkline points={points} color={idx.change_pct >= 0 ? "#22c55e" : "#ef4444"} />
+    </div>
+  );
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center gap-6 overflow-x-auto">
+        {usIndices.map((idx) => row(idx, usSeries.find((s: any) => s.name === idx.name)?.points || [], fmtUSD))}
+        {(usIndices.length > 0 && inIndices.length > 0) && <div className="w-px h-10 shrink-0" style={{ background: "var(--border-subtle)" }} />}
+        {inIndices.map((idx) => row(idx, inSeries.find((s: any) => s.name === idx.name)?.points || [], (v) => fmtINR(v, 0)))}
+        {usIndices.length === 0 && inIndices.length === 0 && (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>Index data unavailable right now.</p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ---------- Hero cards ----------
+
+function HeroCard({
+  accent, flag, title, subtitle, chips, onChipClick, moreHref, tiles,
+}: {
+  accent: string;
+  flag: string;
+  title: string;
+  subtitle: string;
+  chips: string[];
+  onChipClick: (symbol: string) => void;
+  moreHref: () => void;
+  tiles: { icon: React.ReactNode; label: string; description: string; onClick: () => void }[];
+}) {
+  return (
+    <div className="glass-card-static overflow-hidden">
+      <div
+        className="p-5 relative"
+        style={{ background: `linear-gradient(135deg, ${accent}30, ${accent}08)`, borderBottom: `1px solid ${accent}30` }}
+      >
+        <button className="absolute top-4 right-4 w-8 h-8 rounded-full flex items-center justify-center" style={{ background: `${accent}25`, color: accent }} onClick={moreHref} title={`Open ${title}`}>
+          <ChevronRight size={16} />
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="text-3xl leading-none">{flag}</span>
+          <div>
+            <h3 className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>{title}</h3>
+            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{subtitle}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-4">
+          {chips.map((sym) => (
+            <button key={sym} className="chip" style={{ borderColor: `${accent}40` }} onClick={() => onChipClick(sym)}>{sym}</button>
+          ))}
+          <button className="chip" onClick={moreHref}>···</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-px" style={{ background: "var(--border-subtle)" }}>
+        {tiles.map((tile) => (
+          <button key={tile.label} className="p-3 text-left flex flex-col gap-1" style={{ background: "var(--bg-secondary)" }} onClick={tile.onClick}>
+            <span style={{ color: accent }}>{tile.icon}</span>
+            <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{tile.label}</span>
+            <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{tile.description}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Market overview chart ----------
+
+const CHART_TOOLTIP = {
+  contentStyle: { background: "var(--bg-card)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 11 },
+  labelStyle: { color: "var(--text-muted)" },
+};
+
+function MarketOverviewChart({
+  accent, title, fetchHistory, lineColors,
+}: {
+  accent: string;
+  title: string;
+  fetchHistory: (range: string) => Promise<{ data: { data_available: boolean; series: { name: string; points: { t: string; value: number }[] }[] } }>;
+  lineColors: string[];
+}) {
+  const [range, setRange] = useState<(typeof RANGES)[number]>("1M");
+  const history = useApi(() => fetchHistory(range), [range]);
+
+  const series = history.data?.series || [];
+  // Merge per-line point arrays into one array of {t, [name]: value} rows for recharts
+  const merged: Record<string, any> = {};
+  series.forEach((s) => {
+    s.points.forEach((p) => {
+      const key = p.t.slice(0, 10);
+      merged[key] = merged[key] || { t: key };
+      merged[key][s.name] = p.value;
+    });
+  });
+  const rows = Object.values(merged).sort((a: any, b: any) => (a.t > b.t ? 1 : -1));
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <SectionHeader title={title} subtitle="% change over range" />
+        <div className="flex gap-1">
+          {RANGES.map((r) => (
+            <button key={r} className={`chip ${range === r ? "chip-active" : ""}`} onClick={() => setRange(r)}>{r}</button>
+          ))}
+        </div>
+      </div>
+      {history.loading ? (
+        <Skeleton className="h-56 w-full" />
+      ) : history.error ? (
+        <ErrorState message={history.error} onRetry={history.reload} />
+      ) : !history.data?.data_available || rows.length === 0 ? (
+        <EmptyState icon={<LineChartIcon size={24} />} title="Chart data unavailable" description="Needs a configured data source — see Settings." />
+      ) : (
+        <>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rows}>
+                <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis dataKey="t" tick={{ fill: "#565d73", fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#565d73", fontSize: 10 }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => `${v}%`} />
+                <Tooltip {...CHART_TOOLTIP} formatter={(v: any) => `${v}%`} />
+                {series.map((s, i) => (
+                  <Line key={s.name} type="monotone" dataKey={s.name} stroke={lineColors[i % lineColors.length]} strokeWidth={2} dot={false} isAnimationActive={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap gap-4 mt-2">
+            {series.map((s, i) => (
+              <span key={s.name} className="text-[11px] flex items-center gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                <span className="w-2 h-2 rounded-full" style={{ background: lineColors[i % lineColors.length] }} />
+                {s.name}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ---------- Movers panel (Gainers / Losers / Most Active tabs) ----------
+
+function MoversPanel({
+  accent, title, data, loading, error, onRetry, fmtPrice, navigate,
+}: {
+  accent: string;
+  title: string;
+  data: { gainers?: any[]; losers?: any[]; most_active?: any[]; volume_shockers?: any[]; data_available?: boolean; reason?: string } | null | undefined;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+  fmtPrice: (v: number) => string;
+  navigate: () => void;
+}) {
+  const [tab, setTab] = useState<"gainers" | "losers" | "active">("gainers");
+  const rows = tab === "gainers" ? data?.gainers : tab === "losers" ? data?.losers : (data?.most_active || data?.volume_shockers);
+
+  return (
+    <Card padded={false}>
+      <div className="px-5 py-4 flex items-center justify-between border-b" style={{ borderColor: "var(--border-subtle)" }}>
+        <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>{title}</h3>
+        <button className="btn-ghost text-xs" onClick={navigate}>More <ChevronRight size={14} /></button>
+      </div>
+      <div className="flex gap-1 px-4 pt-3">
+        {([["gainers", "Gainers"], ["losers", "Losers"], ["active", "Most Active"]] as const).map(([key, label]) => (
+          <button key={key} className={`chip ${tab === key ? "chip-active" : ""}`} onClick={() => setTab(key)}>{label}</button>
+        ))}
+      </div>
+      <div className="p-4 space-y-1">
+        {loading ? (
+          [0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-full" />)
+        ) : error ? (
+          <ErrorState message={error} onRetry={onRetry} />
+        ) : data?.data_available === false ? (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{data.reason || "Not available."}</p>
+        ) : !rows?.length ? (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>No data.</p>
+        ) : (
+          rows.slice(0, 5).map((m: any) => (
+            <div key={m.symbol} className="flex items-center gap-2.5 text-xs py-1.5">
+              <InitialsBadge symbol={m.symbol} size={28} />
+              <div className="min-w-0 flex-1">
+                <StockLink symbol={m.symbol} />
+                <p className="text-[10px] truncate" style={{ color: "var(--text-muted)" }}>{m.sector || m.name}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="tabular-nums font-semibold" style={{ color: "var(--text-primary)" }}>{fmtPrice(m.ltp)}</p>
+                <Change value={m.change_pct} className="text-[10px] justify-end" />
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ---------- Recent analysis panel ----------
+
+function RecentAnalysisPanel({
+  title, items, loading, error, onRetry, onOpen,
+}: {
+  title: string;
+  items: { symbol: string; model: string; generated_at: string }[] | undefined;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+  onOpen: (symbol: string) => void;
+}) {
+  return (
+    <Card padded={false}>
+      <div className="px-5 py-4 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+        <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>{title}</h3>
+      </div>
+      <div className="p-4 space-y-1">
+        {loading ? (
+          [0, 1, 2].map((i) => <Skeleton key={i} className="h-9 w-full" />)
+        ) : error ? (
+          <ErrorState message={error} onRetry={onRetry} />
+        ) : !items?.length ? (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>No AI analysis generated yet.</p>
+        ) : (
+          items.map((item) => (
+            <button key={item.symbol} className="flex items-center gap-2.5 text-xs py-1.5 w-full text-left hover:bg-white/[0.02] rounded-lg px-1" onClick={() => onOpen(item.symbol)}>
+              <InitialsBadge symbol={item.symbol} size={28} />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{item.symbol}</p>
+                <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>AI Analysis Report</p>
+              </div>
+              <span className="text-[10px] shrink-0" style={{ color: "var(--text-muted)" }}>{timeAgo(item.generated_at)}</span>
+            </button>
+          ))
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ---------- Main dashboard ----------
+
 export default function DashboardView() {
-  const { settings, setSelectedSector, setReportSymbol, isAuthenticated } = useAppStore();
+  const { settings, setSelectedSector, setReportSymbol, setUsSymbol, isAuthenticated } = useAppStore();
   const navigate = useNavigateTab();
   const refreshMs = settings.refreshSec * 1000;
 
-  const regime = useApi(() => signalsAPI.regime(), [], { refreshMs });
   const movers = useApi(() => marketAPI.movers(5), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
+  const usMovers = useApi(() => usMarketAPI.movers(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
   const sectors = useApi(() => marketAPI.sectors(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
   const daily = useApi(() => signalsAPI.dailyList(portfolioParams(settings)), [settings.capital, settings.riskPct]);
   const watchlist = useApi(() => watchlistAPI.list(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
   const usSummary = useApi(() => paperTradingAPI.summary(), [], { enabled: isAuthenticated });
+  const recentIndia = useApi(() => aiAPI.recentCommentary(5), []);
+  const recentUS = useApi(() => usMarketAPI.recentResearch(5), []);
 
   const openReport = (symbol: string) => {
     setReportSymbol(symbol);
     navigate("report");
   };
+  const openUsStock = (symbol: string) => {
+    setUsSymbol(symbol);
+    navigate("us_stocks");
+  };
 
-  const r = regime.data;
-  const idx = r?.indian_market || {};
-  const breadth = movers.data?.breadth;
-  const fii = r?.fii_activity;
-  const color = regimeColor(r?.regime);
-  const evidence: string[] = [...(r?.evidence?.regime || [])];
   const topPicks = daily.data
     ? [...daily.data.top_picks.short_term, ...daily.data.top_picks.mid_term, ...daily.data.top_picks.long_term]
         .sort((a: any, b: any) => b.score - a.score)
@@ -121,30 +373,55 @@ export default function DashboardView() {
 
   return (
     <div className="space-y-5">
-      {/* Market regime */}
-      <div className="animate-fade-in">
-        {regime.error ? (
-          <ErrorState message={regime.error} onRetry={regime.reload} />
-        ) : (
-          <div className="glass-card-static p-4 flex flex-wrap items-center justify-between gap-3" style={{ borderLeft: `3px solid ${color}` }}>
-            <div className="flex items-center gap-3 min-w-0">
-              <Shield size={20} style={{ color, flexShrink: 0 }} />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>MARKET REGIME</span>
-                  {regime.loading ? <Skeleton className="h-5 w-20" /> : <span className="badge badge-neutral" style={{ color }}>{r?.regime}</span>}
-                  {r && <span className="badge badge-info">Mood: {r.mood}</span>}
-                </div>
-                <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>
-                  {regime.loading ? "Loading live regime from Upstox…" : evidence.length ? evidence.join(" · ") : "Based on live index, VIX and FII/DII data."}
-                </p>
-              </div>
-            </div>
-            <button className="btn-secondary text-xs" onClick={() => navigate("analytics")}>
-              View Details <ChevronRight size={14} />
-            </button>
-          </div>
-        )}
+      {/* Ticker strip */}
+      <TickerStrip />
+
+      {/* Hero cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <HeroCard
+          accent={US_ACCENT}
+          flag="🇺🇸"
+          title="US Stocks"
+          subtitle="NYSE & NASDAQ Analysis"
+          chips={US_CHIPS}
+          onChipClick={openUsStock}
+          moreHref={() => navigate("us_stocks")}
+          tiles={[
+            { icon: <Brain size={16} />, label: "AI Stock Analysis", description: "Fundamentals, technicals, news, SEC filings", onClick: () => navigate("us_stocks") },
+            { icon: <Search size={16} />, label: "US Stock Scanner", description: "Find favorable setups automatically", onClick: () => navigate("us_stocks") },
+            { icon: <Sparkles size={16} />, label: "Paper Trading", description: "Practice trades with real signals", onClick: () => navigate("us_stocks") },
+            { icon: <Newspaper size={16} />, label: "US Market Insights", description: "Indices, sectors, news & events", onClick: () => navigate("us_stocks") },
+          ]}
+        />
+        <HeroCard
+          accent={INDIA_ACCENT}
+          flag="🇮🇳"
+          title="Indian Stocks"
+          subtitle="NSE & BSE Analysis"
+          chips={INDIA_CHIPS}
+          onChipClick={openReport}
+          moreHref={() => navigate("report")}
+          tiles={[
+            { icon: <Brain size={16} />, label: "AI Stock Analysis", description: "Fundamentals, technicals, news, earnings", onClick: () => navigate("report") },
+            { icon: <Search size={16} />, label: "India Stock Scanner", description: "Smallcap & midcap opportunities", onClick: () => navigate("scanner") },
+            { icon: <Target size={16} />, label: "Watchlist", description: "Track & manage your stocks", onClick: () => navigate("scanner") },
+            { icon: <Newspaper size={16} />, label: "Market Insights", description: "Indices, sectors, news & events", onClick: () => navigate("analytics") },
+          ]}
+        />
+      </div>
+
+      {/* Market overview charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <MarketOverviewChart accent={US_ACCENT} title="US Market Overview" fetchHistory={usMarketAPI.indicesHistory} lineColors={["#2563eb", "#a855f7", "#22c55e"]} />
+        <MarketOverviewChart accent={INDIA_ACCENT} title="Indian Market Overview" fetchHistory={marketAPI.indicesHistory} lineColors={["#f59e0b", "#ef4444", "#22c55e"]} />
+      </div>
+
+      {/* Movers + Recent analysis */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <MoversPanel accent={US_ACCENT} title="Top US Movers" data={usMovers.data} loading={usMovers.loading} error={usMovers.error} onRetry={usMovers.reload} fmtPrice={fmtUSD} navigate={() => navigate("us_stocks")} />
+        <RecentAnalysisPanel title="Recent US Analysis" items={recentUS.data?.items} loading={recentUS.loading} error={recentUS.error} onRetry={recentUS.reload} onOpen={openUsStock} />
+        <MoversPanel accent={INDIA_ACCENT} title="Top Indian Movers" data={movers.data} loading={movers.loading} error={movers.error} onRetry={movers.reload} fmtPrice={(v) => fmtINR(v)} navigate={() => navigate("scanner")} />
+        <RecentAnalysisPanel title="Recent Indian Analysis" items={recentIndia.data?.items} loading={recentIndia.loading} error={recentIndia.error} onRetry={recentIndia.reload} onOpen={openReport} />
       </div>
 
       {/* Manual stock entry — full analysis for any symbol, not just scanner picks */}
@@ -163,52 +440,8 @@ export default function DashboardView() {
         </p>
       </Card>
 
-      {/* Metric cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger-children">
-        <MetricCard
-          title="NIFTY 50"
-          value={fmtNum(idx.nifty_50?.value)}
-          change={fmtPct(idx.nifty_50?.change)}
-          changeTone={tone(idx.nifty_50?.change)}
-          subtitle={`Bank Nifty ${fmtNum(idx.bank_nifty?.value)} (${fmtPct(idx.bank_nifty?.change)})`}
-          icon={<LineChart size={16} style={{ color: "var(--accent-indigo)" }} />}
-          onClick={() => navigate("analytics")}
-          loading={regime.loading}
-        />
-        <MetricCard
-          title="INDIA VIX"
-          value={fmtNum(idx.india_vix?.value)}
-          change={fmtPct(idx.india_vix?.change)}
-          changeTone={tone(idx.india_vix?.change == null ? null : -idx.india_vix.change)}
-          subtitle="Volatility index — rising VIX = rising fear"
-          icon={<Activity size={16} style={{ color: "var(--accent-cyan)" }} />}
-          onClick={() => navigate("analytics")}
-          loading={regime.loading}
-        />
-        <MetricCard
-          title="BREADTH (UNIVERSE)"
-          value={breadth ? `${breadth.advances} ▲ / ${breadth.declines} ▼` : "—"}
-          change={breadth ? `${breadth.above_200dma}/${breadth.total} above 200-DMA` : undefined}
-          changeTone={breadth ? (breadth.advances >= breadth.declines ? "bullish" : "bearish") : "neutral"}
-          subtitle="Approved sector universe"
-          icon={<BarChart3 size={16} style={{ color: "#22c55e" }} />}
-          onClick={() => navigate("scanner")}
-          loading={movers.loading}
-        />
-        <MetricCard
-          title="FII NET (CASH)"
-          value={fii ? fmtINRCompact(fii.net * 1e7) : "—"}
-          change={r?.dii_activity ? `DII ${fmtINRCompact(r.dii_activity.net * 1e7)}` : undefined}
-          changeTone={tone(fii?.net)}
-          subtitle={fii ? `Session ${fii.date}` : "Institutional flows"}
-          icon={<Globe size={16} style={{ color: "#f59e0b" }} />}
-          onClick={() => navigate("analytics")}
-          loading={regime.loading}
-        />
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Top picks */}
+        {/* Daily Stock Signals */}
         <div className="lg:col-span-2 glass-card-static overflow-hidden">
           <div className="px-5 py-4 flex items-center justify-between border-b" style={{ borderColor: "var(--border-subtle)" }}>
             <div className="flex items-center gap-2">
@@ -255,7 +488,7 @@ export default function DashboardView() {
           </div>
         </div>
 
-        {/* Portfolio & movers */}
+        {/* Portfolio & US Paper Trading quick-cards */}
         <div className="space-y-5">
           <button className="glass-card p-5 w-full text-left" onClick={() => navigate("portfolio")}>
             <div className="flex items-center justify-between mb-3">
@@ -279,7 +512,7 @@ export default function DashboardView() {
           <button className="glass-card p-5 w-full text-left" onClick={() => navigate("us_stocks")}>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <DollarSign size={16} style={{ color: "var(--accent-indigo)" }} />
+                <DollarSign size={16} style={{ color: US_ACCENT }} />
                 <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>US Paper Trading</h3>
               </div>
               <ChevronRight size={14} style={{ color: "var(--text-muted)" }} />
@@ -307,28 +540,6 @@ export default function DashboardView() {
               </>
             ) : null}
           </button>
-
-          <Card padded={false}>
-            <div className="px-5 py-4 flex items-center justify-between border-b" style={{ borderColor: "var(--border-subtle)" }}>
-              <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>Top Movers</h3>
-              <button className="btn-ghost text-xs" onClick={() => navigate("analytics")}>More <ChevronRight size={14} /></button>
-            </div>
-            <div className="p-4 space-y-1">
-              {movers.loading ? (
-                [0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-6 w-full" />)
-              ) : movers.error ? (
-                <ErrorState message={movers.error} onRetry={movers.reload} />
-              ) : (
-                [...(movers.data?.gainers || []).slice(0, 3), ...(movers.data?.losers || []).slice(0, 3)].map((m: any) => (
-                  <div key={m.symbol} className="flex items-center justify-between text-xs py-1">
-                    <StockLink symbol={m.symbol} />
-                    <span className="tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmtINR(m.ltp)}</span>
-                    <Change value={m.change_pct} className="w-16 text-right" />
-                  </div>
-                ))
-              )}
-            </div>
-          </Card>
         </div>
       </div>
 
@@ -420,8 +631,8 @@ export default function DashboardView() {
         <Shield size={16} style={{ color: "var(--color-info)", flexShrink: 0, marginTop: 1 }} />
         <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-muted)" }}>
           <strong style={{ color: "var(--text-secondary)" }}>ANALYTICAL DECISION-SUPPORT SYSTEM.</strong>{" "}
-          Probabilistic estimates, not certainties. No trades are executed automatically. All market data sourced from Upstox APIs.
-          Protect capital first — opportunity comes second.
+          Probabilistic estimates, not certainties. No trades are executed automatically. Indian data from Upstox, US data
+          from Alpaca (once configured) and SEC EDGAR. Protect capital first — opportunity comes second.
         </p>
       </div>
     </div>

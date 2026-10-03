@@ -208,6 +208,27 @@ export function BucketChips({ buckets }: { buckets: string[] | undefined }) {
   );
 }
 
+const BADGE_PALETTE = ["#6366f1", "#22c55e", "#f59e0b", "#ec4899", "#14b8a6", "#a855f7", "#ef4444", "#22d3ee"];
+
+/** Colored rounded badge with a stock's first 1-2 letters — a stand-in for a
+ * company logo (no external images/logo API), mirroring the tinted-square
+ * style already used for sector icons (background: `${color}15`, color).
+ * The color is deterministic per symbol (simple hash into a fixed palette),
+ * not random, so a given stock always gets the same color across renders. */
+export function InitialsBadge({ symbol, size = 32 }: { symbol: string; size?: number }) {
+  const letters = symbol.slice(0, 2).toUpperCase();
+  const hash = symbol.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  const color = BADGE_PALETTE[hash % BADGE_PALETTE.length];
+  return (
+    <div
+      className="rounded-lg flex items-center justify-center shrink-0 font-bold"
+      style={{ width: size, height: size, background: `${color}20`, color, fontSize: size * 0.34 }}
+    >
+      {letters}
+    </div>
+  );
+}
+
 export function StockLink({ symbol, className = "" }: { symbol: string; className?: string }) {
   return (
     <Link
