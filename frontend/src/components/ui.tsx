@@ -167,17 +167,42 @@ const ENTRY_STYLE: Record<string, string> = {
   AVOID: "badge-bearish",
 };
 
+// What each entry classification actually means — shown as a hover tooltip so the
+// badge text ("Breakout Watch", "Buy On Retest"...) isn't the only explanation offered.
+const ENTRY_TOOLTIP: Record<string, string> = {
+  BUY_NOW: "Strong setup with confirming volume in a favorable market regime — supports buying now rather than waiting for a pullback.",
+  BUY_ON_RETEST: "A strong setup, but the market regime (or a more moderate score) calls for waiting for a pullback/retest instead of chasing the current price.",
+  BUY_ON_DIP: "Set up for a dip-buy inside an already-established uptrend.",
+  BREAKOUT_WATCH: "An early, not-yet-confirmed positive setup — worth watching for confirmation (rising volume, a clean break of resistance) before entering.",
+  WAIT: "No clear edge either way right now — the technicals don't support an entry yet, but nothing rules one out either.",
+  EXTENDED: "Price has already moved too far, too fast (a big 5-day gain, or RSI above 80) — chasing here risks buying right before a pullback.",
+  AVOID: "Technicals are currently working against this stock — an entry isn't supported right now.",
+};
+
 export function EntryBadge({ entry }: { entry: string | null | undefined }) {
   if (!entry) return <span className="text-muted">—</span>;
-  return <span className={`badge ${ENTRY_STYLE[entry] || "badge-neutral"}`}>{humanize(entry.toLowerCase())}</span>;
+  return (
+    <span className={`badge ${ENTRY_STYLE[entry] || "badge-neutral"}`} title={ENTRY_TOOLTIP[entry] || undefined}>
+      {humanize(entry.toLowerCase())}
+    </span>
+  );
 }
+
+// What each scanner "setup" bucket actually screens for and the holding period it's
+// designed around — mirrors BUCKET_TERM_MAP in app/services/analytics/watchlist_service.py.
+const BUCKET_TOOLTIP: Record<string, string> = {
+  momentum_breakout: "Volume-driven breakout already underway (strong trend, RSI 55-70). Tends to play out over days, not held long — a short-term setup.",
+  breakout_retest: "Near its 52-week high with volume cooling off — waiting for a retest entry inside a recent breakout. Short-term: triggers within days to a couple of weeks.",
+  early_stage_breakout: "A volatility-compression base just starting to break out on rising volume. Typically weeks to a couple of months to play out — a medium-term setup.",
+  quality_pullback: "A dip inside a stock whose 200-day trend is still intact (buy-the-dip in an uptrend). Meant to be held while that longer trend plays out — a long-term setup.",
+};
 
 export function BucketChips({ buckets }: { buckets: string[] | undefined }) {
   if (!buckets?.length) return <span className="text-muted">—</span>;
   return (
     <div className="flex flex-wrap gap-1">
       {buckets.map((b) => (
-        <span key={b} className="badge badge-accent" style={{ fontSize: 9 }}>{humanize(b)}</span>
+        <span key={b} className="badge badge-accent" style={{ fontSize: 9 }} title={BUCKET_TOOLTIP[b] || undefined}>{humanize(b)}</span>
       ))}
     </div>
   );

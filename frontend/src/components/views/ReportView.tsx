@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { BellPlus, ChevronRight, Clock, Download, FileText, Newspaper, Shield, Target, TrendingDown, TrendingUp } from "lucide-react";
 import { marketAPI, signalsAPI } from "@/lib/api";
@@ -187,7 +187,7 @@ function downloadText(filename: string, content: string) {
 }
 
 export default function ReportView() {
-  const { settings } = useAppStore();
+  const { settings, reportSymbol, setReportSymbol } = useAppStore();
   const [symbol, setSymbol] = useState("");
   const [recent, setRecent] = useState<string[]>(() => (typeof window !== "undefined" ? loadRecent() : []));
   const [order, setOrder] = useState<{ side: "BUY" | "SELL"; defaults: OrderDefaults } | null>(null);
@@ -197,6 +197,17 @@ export default function ReportView() {
     setSymbol(s);
     setRecent((prev) => saveRecent(s, prev));
   };
+
+  // A symbol handed off from elsewhere (e.g. the Dashboard's "Analyze a stock" box)
+  // via the shared store — consumed once, then cleared so it doesn't keep overriding
+  // a later search typed directly on this page.
+  useEffect(() => {
+    if (reportSymbol) {
+      select(reportSymbol);
+      setReportSymbol(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportSymbol]);
 
   const quote = useApi(() => marketAPI.quote(symbol), [symbol], { enabled: !!symbol });
   const analysis = useApi(() => signalsAPI.analyze(symbol, portfolioParams(settings)), [symbol, settings.capital, settings.riskPct], { enabled: !!symbol });

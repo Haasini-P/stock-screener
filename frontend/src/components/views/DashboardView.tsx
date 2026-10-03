@@ -5,6 +5,8 @@ import {
   BarChart3,
   Brain,
   ChevronRight,
+  Clock,
+  FileSearch,
   Globe,
   LineChart,
   Shield,
@@ -14,12 +16,13 @@ import {
   Wallet,
   Zap,
 } from "lucide-react";
-import { marketAPI, signalsAPI } from "@/lib/api";
+import { marketAPI, signalsAPI, watchlistAPI } from "@/lib/api";
 import { portfolioParams, useAppStore } from "@/lib/store";
 import { useApi } from "@/lib/useApi";
-import { fmtINR, fmtINRCompact, fmtNum, fmtPct, tone, toneColor } from "@/lib/format";
+import { fmtDate, fmtINR, fmtINRCompact, fmtNum, fmtPct, fmtTime, tone, toneColor } from "@/lib/format";
 import { useNavigateTab } from "../AppShell";
-import { Card, Change, EmptyState, EntryBadge, ErrorState, Skeleton, StockLink } from "../ui";
+import SearchBox from "../SearchBox";
+import { BucketChips, Card, Change, EmptyState, EntryBadge, ErrorState, Skeleton, StockLink } from "../ui";
 
 export const SECTOR_ICONS: Record<string, { icon: typeof Shield; color: string }> = {
   Defence: { icon: Shield, color: "#ef4444" },
@@ -83,7 +86,7 @@ function MetricCard({
 }
 
 export default function DashboardView() {
-  const { settings, setSelectedSector } = useAppStore();
+  const { settings, setSelectedSector, setReportSymbol } = useAppStore();
   const navigate = useNavigateTab();
   const refreshMs = settings.refreshSec * 1000;
 
@@ -91,6 +94,12 @@ export default function DashboardView() {
   const movers = useApi(() => marketAPI.movers(5), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
   const sectors = useApi(() => marketAPI.sectors(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
   const daily = useApi(() => signalsAPI.dailyList(portfolioParams(settings)), [settings.capital, settings.riskPct]);
+  const watchlist = useApi(() => watchlistAPI.list(), [], { refreshMs: refreshMs ? Math.max(refreshMs, 60000) : 0 });
+
+  const openReport = (symbol: string) => {
+    setReportSymbol(symbol);
+    navigate("report");
+  };
 
   const r = regime.data;
   const idx = r?.indian_market || {};
@@ -104,6 +113,9 @@ export default function DashboardView() {
         .slice(0, 6)
     : [];
   const sectorMap: Record<string, any> = Object.fromEntries((sectors.data?.sectors || []).map((s: any) => [s.sector, s]));
+  const suggested = [...(watchlist.data?.items || [])]
+    .sort((a: any, b: any) => new Date(b.added_at).getTime() - new Date(a.added_at).getTime())
+    .slice(0, 8);
 
   return (
     <div className="space-y-5">
@@ -132,6 +144,22 @@ export default function DashboardView() {
           </div>
         )}
       </div>
+
+      {/* Manual stock entry — full analysis for any symbol, not just scanner picks */}
+      <Card className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex items-center gap-2 shrink-0">
+          <FileSearch size={16} style={{ color: "var(--accent-indigo)" }} />
+          <p className="text-sm font-bold whitespace-nowrap" style={{ color: "var(--text-primary)" }}>Analyze a stock</p>
+        </div>
+        <SearchBox
+          className="w-full sm:max-w-md"
+          placeholder="Enter any NSE stock symbol for a full report (e.g. RELIANCE)…"
+          onSelect={openReport}
+        />
+        <p className="text-[11px] sm:ml-auto" style={{ color: "var(--text-muted)" }}>
+          Opens the full Stock Report — thesis, trade plan, term outlook, fundamentals and news.
+        </p>
+      </Card>
 
       {/* Metric cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger-children">
@@ -267,6 +295,48 @@ export default function DashboardView() {
               )}
             </div>
           </Card>
+        </div>
+      </div>
+
+      {/* Suggested stocks — scanner watchlist, with when each one was first flagged */}
+      <div className="glass-card-static overflow-hidden">
+        <div className="px-5 py-4 flex items-center justify-between border-b" style={{ borderColor: "var(--border-subtle)" }}>
+          <div className="flex items-center gap-2">
+            <Clock size={16} style={{ color: "var(--accent-indigo)" }} />
+            <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>Recently Suggested Stocks</h3>
+          </div>
+          <button className="btn-ghost text-xs" onClick={() => navigate("scanner")}>Open Scanner <ChevronRight size={14} /></button>
+        </div>
+        <div className="p-5">
+          {watchlist.loading ? (
+            <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-9 w-full" />)}</div>
+          ) : watchlist.error ? (
+            <ErrorState message={watchlist.error} onRetry={watchlist.reload} />
+          ) : suggested.length === 0 ? (
+            <EmptyState
+              icon={<Sparkles size={28} />}
+              title="No suggested stocks yet"
+              description="Stocks get tracked here automatically once the Market Scanner flags them, with the date and time they were first suggested."
+              action={<button className="btn-secondary text-xs" onClick={() => navigate("scanner")}>Open scanner</button>}
+            />
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead><tr><th>Stock</th><th>Setup</th><th>Term</th><th>Source</th><th>Suggested on</th></tr></thead>
+                <tbody>
+                  {suggested.map((item: any) => (
+                    <tr key={item.symbol} className="cursor-pointer" onClick={() => openReport(item.symbol)}>
+                      <td><StockLink symbol={item.symbol} /></td>
+                      <td><BucketChips buckets={item.bucket ? [item.bucket] : undefined} /></td>
+                      <td><span className="badge badge-neutral">{item.term}</span></td>
+                      <td className="text-xs" style={{ color: "var(--text-muted)" }}>{item.source === "manual" ? "Manually added" : "Scanner"}</td>
+                      <td className="text-xs whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{fmtDate(item.added_at)} · {fmtTime(item.added_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
 

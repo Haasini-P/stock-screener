@@ -241,6 +241,65 @@ def _compact_competitors(competitors: Optional[list], limit: int = 5, name_chars
     return "; ".join(parts)
 
 
+def _humanize(s: Optional[str]) -> str:
+    return s.replace("_", " ").title() if s else ""
+
+
+def _compact_income_statement(income_statement: Optional[dict], years: int = 3) -> str:
+    """income_statement['income_statement'] is a list of {category, history: [{value,
+    period, change}, ...]} rows (revenue / operating_profit / net_profit) — this app's
+    system prompt asks for real Growth/Profitability figures (section 5) that were
+    previously never surfaced at all, leaving the model with nothing to analyze there."""
+    rows = (income_statement or {}).get("income_statement")
+    if not rows:
+        return ""
+    units = (income_statement or {}).get("units_in", "")
+    parts = []
+    for row in rows:
+        history = (row.get("history") or [])[:years]
+        if not history:
+            continue
+        points = ", ".join(
+            f"{_round(h.get('value'), 0)} ({h.get('period')}" + (f", {h['change']} YoY)" if h.get("change") else ")")
+            for h in history
+        )
+        parts.append(f"{_humanize(row.get('category'))}: {points}")
+    if not parts:
+        return ""
+    return f"({units}) " + "; ".join(parts) if units else "; ".join(parts)
+
+
+def _compact_balance_sheet(balance_sheet: Optional[dict], years: int = 3) -> str:
+    history = (balance_sheet or {}).get("history")
+    if not history:
+        return ""
+    units = (balance_sheet or {}).get("units_in", "")
+    parts = [
+        f"assets {_round(h.get('total_asset'), 0)} / liabilities {_round(h.get('total_liability'), 0)} ({h.get('period')})"
+        for h in history[:years] if h.get("total_asset") is not None
+    ]
+    if not parts:
+        return ""
+    return (f"({units}) " if units else "") + "; ".join(parts)
+
+
+def _compact_cash_flow(cash_flow: Optional[dict], years: int = 2) -> str:
+    rows = (cash_flow or {}).get("cash_flow")
+    if not rows:
+        return ""
+    units = (cash_flow or {}).get("units_in", "")
+    parts = []
+    for row in rows:
+        history = (row.get("history") or [])[:years]
+        if not history:
+            continue
+        points = ", ".join(f"{_round(h.get('value'), 0)} ({h.get('period')})" for h in history)
+        parts.append(f"{_humanize(row.get('category'))}: {points}")
+    if not parts:
+        return ""
+    return (f"({units}) " if units else "") + "; ".join(parts)
+
+
 def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optional[dict]) -> str:
     """A structured brief from data this app already computes — analysis from
     /api/signals/analyze/{symbol}, fundamentals from /api/stocks/{symbol}/fundamentals,
@@ -270,6 +329,9 @@ def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optiona
         f"Target 1/2: {ee.get('target_1')}/{ee.get('target_2')} | R:R {ee.get('risk_reward')}",
         f"Suggested position: {pos.get('quantity')} shares, value {pos.get('value')}, risk {pos.get('max_risk')}",
     ]
+    holding = s.get("holding") or {}
+    if holding.get("is_holding"):
+        lines.append(f"EXISTING HOLDING (from the user's live broker account) — engine says: {holding.get('action')}")
     # pe/roe/revenue_growth are never populated on this code path (generate_signal()
     # is called without a fundamentals arg) — only emit this line when there's a
     # real summary, instead of three "None"s that waste tokens and look like data.
@@ -320,6 +382,15 @@ def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optiona
         ratios_text = _compact_key_ratios(fundamentals.get("key_ratios"))
         if ratios_text:
             lines.append(f"Key ratios: {ratios_text}")
+        income_text = _compact_income_statement(fundamentals.get("income_statement"))
+        if income_text:
+            lines.append(f"Income statement (yearly): {income_text}")
+        balance_text = _compact_balance_sheet(fundamentals.get("balance_sheet"))
+        if balance_text:
+            lines.append(f"Balance sheet (yearly): {balance_text}")
+        cash_flow_text = _compact_cash_flow(fundamentals.get("cash_flow"))
+        if cash_flow_text:
+            lines.append(f"Cash flow (yearly): {cash_flow_text}")
         shareholding_text = _compact_shareholding(fundamentals.get("shareholding"))
         if shareholding_text:
             lines.append(f"Shareholding (latest): {shareholding_text}")
@@ -356,7 +427,8 @@ def _build_context(analysis: dict, fundamentals: Optional[dict], regime: Optiona
 
     lines.append(
         "\nProduce the full report structure defined in your system prompt for this stock. Where a section's "
-        "data wasn't provided above, say so explicitly (per your FACT/ESTIMATE/OPINION rules) rather than "
+        "data wasn't provided above, say so explicitly (per your FACT/MODEL_PREDICTION/ANALYST_INTERPRETATION/"
+        "DATA_NOT_VERIFIED rules) rather than "
         "inventing numbers — do not skip a section silently, just mark it not verifiable from available data. "
         "Be concise: the app already shows the numeric tables above (predictions, entry/stop/targets, indicators) "
         "to the reader next to your commentary, so don't restate them in full — reference them briefly and spend "
@@ -448,9 +520,10 @@ async def generate_commentary(db: AsyncSession, user: Optional[User], symbol: st
         text = await _call_model(
             settings["provider"], settings["model"], settings["api_key"],
             prompt_row.content, context, chart_png,
-            # The full research-report system prompt asks for ~16 structured
-            # sections — 600 tokens (a quick take) isn't nearly enough for it.
-            max_tokens=4096,
+            # The institutional-grade research prompt asks for 25 structured sections
+            # plus a final decision table — a stricter cap here risks silently truncating
+            # the report mid-section rather than running short, which is worse.
+            max_tokens=8192,
         )
     except CommentaryError as e:
         logger.error("ai_commentary_failed", symbol=symbol, provider=settings["provider"], error=str(e))
@@ -538,11 +611,12 @@ async def generate_batch_commentary(db: AsyncSession, user: Optional[User], symb
 
     context = (
         "This is a MULTI-STOCK QUICK SCAN, not a single deep-dive report. For EACH stock below, "
-        "give a condensed verdict in this exact shape — do not use the full 16-section report format "
+        "give a condensed verdict in this exact shape — do not use the full multi-section report format "
         "from your system prompt for this request:\n\n"
-        "**SYMBOL** — FINAL ACTION (one of: BUY NOW — SMALL STARTER / BUY ON DIP / WAIT FOR BREAKOUT "
-        "CONFIRMATION / WATCH / AVOID) — one-line reason citing the specific numbers given, labeled "
-        "FACT/ESTIMATE/OPINION per your system prompt's rules. Stocks marked EXISTING HOLDING below are "
+        "**SYMBOL** — FINAL ACTION (one of: BUY NOW — SMALL STARTER / BUY ON DIP / ACCUMULATE / WAIT FOR "
+        "BREAKOUT CONFIRMATION / WATCH / AVOID) — one-line reason citing the specific numbers given, labeled "
+        "FACT/MODEL_PREDICTION/ANALYST_INTERPRETATION/DATA_NOT_VERIFIED per your system prompt's rules. "
+        "Stocks marked EXISTING HOLDING below are "
         "already in my live portfolio — for those, say ADD / HOLD / REDUCE instead of a fresh-buy verdict. "
         "Don't assume any other stock is held.\n\n"
         + "\n\n".join(blocks)
